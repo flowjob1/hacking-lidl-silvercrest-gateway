@@ -30,9 +30,21 @@ unsigned int gCHKKEY_CNT = 0;
  * and restores normal boot.
  * The flag is one-shot: the bootloader clears it before entering
  * download mode.
+ *
+ * Address 0xA03FFFFC = KSEG1 (uncached) alias of physical 0x003FFFFC,
+ * inside a 4 KB page (0x003FF000–0x003FFFFF) declared as
+ * reserved-memory with no-map in the device tree.  The kernel never
+ * allocates this page — no KSEG0/KSEG1 coherency conflict.
+ *
+ * KSEG1 is used (not KSEG0) so that both the read and the clear
+ * bypass the cache and go directly to DRAM.  Without this, the
+ * clear (write 0) stays in the write-back cache and is lost on
+ * power cycle — causing a false boot-hold on every cold boot.
+ *
+ * Top of DRAM (0x81FFFFFC) is NOT safe: btcode stack starts there.
  */
 #define BOOTHOLD_MAGIC  0x484F4C44  /* "HOLD" */
-#define BOOTHOLD_RAM    ((volatile unsigned long *)0x803FFFFC)
+#define BOOTHOLD_RAM    ((volatile unsigned long *)0xA03FFFFC)
 
 void goToDownMode(void);
 

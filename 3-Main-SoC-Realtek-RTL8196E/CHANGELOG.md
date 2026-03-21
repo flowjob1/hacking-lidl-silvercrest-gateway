@@ -6,6 +6,53 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.1.0] - 2026-03-21
+
+### Bug fixes
+- **`boothold` fails on running system**: the kernel's page allocator actively
+  uses the page at physical `0x003FFFFC` (KSEG0 cached), overwriting the HOLD
+  magic written by `devmem` (KSEG1 uncached) within milliseconds. Fixed by
+  declaring the page as `reserved-memory` with `no-map` in the device tree —
+  the kernel never allocates it, eliminating the cache coherency conflict.
+  Address kept at `0x003FFFFC` (top of DRAM is unsafe: btcode stack).
+  Bootloader V2.4: BOOTHOLD_RAM uses KSEG1 (`0xA03FFFFC`) so the clear
+  bypasses the write-back cache and reaches DRAM — prevents false boot-hold
+  after power cycle.
+- **Thread dataset lost on reboot**: S70otbr sync loop only ran 60s after boot —
+  networks created later were never persisted. Replaced with a persistent daemon
+  that polls `ot-ctl dataset active -x` every 30s and syncs to flash only when
+  the dataset changes. Traps SIGTERM for a final sync on shutdown.
+- **No shutdown hooks**: added `::shutdown:` entry to rootfs inittab, calling a
+  new `rcK` script that stops all services in reverse order on reboot — ensures
+  clean `stop` for otbr-agent and all other init scripts.
+
+### New features
+- **OTBR status LED**: enabled `CONFIG_LEDS_TRIGGER_NETDEV` in kernel config.
+  S70otbr configures the status LED as a netdev trigger on `wpan0` — LED reflects
+  Thread network link state (OFF = no carrier, ON = joined). No impact on
+  serialgateway mode (LED still controlled directly by the application).
+
+### Improvements
+- **Auto-flash on first flash**: `flash_install_rtl8196e.sh` now attempts auto-flash
+  when `BOOTLOADER_TYPE=v2` even without SSH (first flash, `FW_VERSION` unknown).
+  Worst case (old V2.3 without auto-flash): 3-min timeout then fallback to manual FLW.
+- **EFR32 flash prompt**: at the end of `flash_install_rtl8196e.sh`, interactive mode
+  now offers to launch `flash_efr32.sh` to flash the Zigbee/Thread radio firmware.
+- **`userdata.bin` and `rootfs.bin` removed from git**: both binaries are now
+  rebuilt on the fly by the build/flash scripts (skeletons and build tools are
+  in git). `build_fullflash.sh` and `create_fullflash.sh` auto-rebuild
+  `rootfs.bin` if missing. Skeleton backup/restore traps simplified.
+- **`create_fullflash.sh` aligned**: now prompts for network/radio configuration
+  and rebuilds userdata via `build_userdata.sh --jffs2-only` before assembly,
+  matching `build_fullflash.sh` behavior.
+- **Dropbear 2025.89**: updated from 2025.88.
+- **EFR32 build scripts**: all firmware build scripts (bootloader, NCP, RCP,
+  OT-RCP, Router) now consistently output exactly two files in `firmware/`:
+  `.gbl` (for UART/Xmodem flashing) and `.s37` (for J-Link). Removed `.hex`,
+  `.bin`, and intermediate `.s37` variants.
+
+---
+
 ## [2.0.1] - 2026-03-17
 
 ### Bug fixes
@@ -43,7 +90,7 @@ rootfs (33-), and userdata (34-).
 - **SSH ControlMaster**: single password prompt instead of two
 - **SSH auth check**: fail fast on bad password
 - **Clean git checkout after flash**: `build_fullflash.sh` and `flash_userdata.sh`
-  restore `userdata.bin` and skeleton after build so `git pull` is not blocked
+  restore skeleton after build so `git pull` is not blocked
 - **`flash_remote.sh` refactored** (renamed from `remote_flash.sh`):
   - `LINUX_IP` is now required (no more hardcoded default)
   - Dual-port SSH probe: port 2333 → Tuya error with redirect to `flash_install_rtl8196e.sh`
