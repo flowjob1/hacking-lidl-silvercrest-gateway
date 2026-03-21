@@ -4,7 +4,7 @@
 # Uses arch/mips/boot/compressed/ (zboot) — no external lzma or lzma-loader.
 #
 # Supports two Ethernet drivers selectable at build time:
-#   - rtl8196e-eth  (new, recommended) — default
+#   - rtl8196e  (new, recommended) — default
 #   - rtl819x       (legacy SDK port)  — pass 'legacy' argument
 #
 # Usage:
@@ -88,7 +88,7 @@ for arg in "$@"; do
         --help|-h)
             echo "Usage: $0 [legacy] [clean|menuconfig|olddefconfig|vmlinux]"
             echo ""
-            echo "  (none)        New driver (rtl8196e-eth) — default"
+            echo "  (none)        New driver (rtl8196e) — default"
             echo "  legacy        Legacy driver (rtl819x)"
             echo "  clean         Remove build tree and rebuild from scratch"
             echo "  menuconfig    Run kernel menuconfig"
@@ -106,10 +106,10 @@ done
 
 # Driver-specific settings
 if [ "$DRIVER" = "new" ]; then
-    export LOCALVERSION="-rtl8196e-eth"
-    BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-eth"
+    export LOCALVERSION="-rtl8196e"
+    BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e"
     IMAGE="${SCRIPT_DIR}/kernel.img"
-    DRIVER_LABEL="rtl8196e-eth (new, recommended)"
+    DRIVER_LABEL="rtl8196e (new, recommended)"
 else
     export LOCALVERSION="-rtl8196e"
     BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-legacy"
@@ -189,17 +189,14 @@ cd "$BUILD_DIR"
 if [ ! -f .config ]; then
     echo "Setting up .config (driver: ${DRIVER_LABEL})..."
     if [ "$DRIVER" = "new" ]; then
-        sed \
-            -e 's/^CONFIG_RTL819X=y$/# CONFIG_RTL819X is not set/' \
-            -e '/^# CONFIG_RTL819X is not set$/a CONFIG_RTL8196E_ETH=y' \
-            "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
-        echo "CONFIG_KERNEL_LZMA=y" >> .config
+        # Config already has RTL8196E_ETH=y, RTL819X unset, KERNEL_LZMA=y
+        cp "${SCRIPT_DIR}/config-5.10.246-realtek.txt" .config
     else
-        # Legacy: ensure RTL8196E_ETH is not set
+        # Legacy: swap driver selection
         sed \
+            -e 's/^# CONFIG_RTL819X is not set$/CONFIG_RTL819X=y/' \
             -e 's/^CONFIG_RTL8196E_ETH=y$/# CONFIG_RTL8196E_ETH is not set/' \
             "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
-        echo "CONFIG_KERNEL_LZMA=y" >> .config
     fi
     make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
     echo ""
