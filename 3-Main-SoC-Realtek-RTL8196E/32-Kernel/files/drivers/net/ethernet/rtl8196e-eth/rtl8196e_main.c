@@ -16,22 +16,24 @@
 #include <linux/timer.h>
 #include <linux/errno.h>
 #include <linux/ethtool.h>
+#include <linux/mfd/syscon.h>
 #include <asm/cacheflush.h>
+#include <asm/mach-realtek/imem.h>
 #include "rtl8196e_dt.h"
 #include "rtl8196e_hw.h"
 #include "rtl8196e_ring.h"
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "1.2"
+#define RTL8196E_DRV_VERSION "2.0"
 
-#define RTL8196E_TX_DESC      600
-#define RTL8196E_RX_DESC      500
-#define RTL8196E_RX_MBUF_DESC 500
+#define RTL8196E_TX_DESC      128
+#define RTL8196E_RX_DESC      128
+#define RTL8196E_RX_MBUF_DESC 128
 #define RTL8196E_CLUSTER_SIZE 1700
 
-#define RTL8196E_TX_STOP_THRESH 16
-#define RTL8196E_TX_WAKE_THRESH 64
+#define RTL8196E_TX_STOP_THRESH 4
+#define RTL8196E_TX_WAKE_THRESH 16
 
 static unsigned int link_poll_ms;
 module_param(link_poll_ms, uint, 0644);
@@ -131,9 +133,9 @@ static void rtl8196e_dbg_timer_fn(struct timer_list *t)
 	rx_entry = rtl8196e_ring_rx_pkthdr_entry(ring, rx_idx);
 	rx_mbuf_entry = rtl8196e_ring_rx_mbuf_entry(ring, rx_idx);
 
-	isr = *(volatile u32 *)CPUIISR;
-	imr = *(volatile u32 *)CPUIIMR;
-	icr = *(volatile u32 *)CPUICR;
+	isr = rtl8196e_readl(CPUIISR);
+	imr = rtl8196e_readl(CPUIIMR);
+	icr = rtl8196e_readl(CPUICR);
 
 	if (entry)
 		ph = (struct rtl_pktHdr *)(entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
@@ -145,14 +147,14 @@ static void rtl8196e_dbg_timer_fn(struct timer_list *t)
 		    icr, imr, isr);
 	netdev_info(priv->ndev,
 		    "dbg: CPUTPDCR0=0x%08x CPURPDCR0=0x%08x CPURMDCR0=0x%08x\n",
-		    *(volatile u32 *)CPUTPDCR0,
-		    *(volatile u32 *)CPURPDCR0,
-		    *(volatile u32 *)CPURMDCR0);
+		    rtl8196e_readl(CPUTPDCR0),
+		    rtl8196e_readl(CPURPDCR0),
+		    rtl8196e_readl(CPURMDCR0));
 	netdev_info(priv->ndev,
 		    "dbg: CPUQDM0=0x%08x CPUQDM2=0x%08x CPUQDM4=0x%08x\n",
-		    *(volatile u32 *)CPUQDM0,
-		    *(volatile u32 *)CPUQDM2,
-		    *(volatile u32 *)CPUQDM4);
+		    rtl8196e_readl(CPUQDM0),
+		    rtl8196e_readl(CPUQDM2),
+		    rtl8196e_readl(CPUQDM4));
 
 	if (ph) {
 		netdev_info(priv->ndev,
@@ -191,31 +193,27 @@ static int rtl8196e_open(struct net_device *ndev)
 	int ret;
 	bool link;
 
-	napi_enable(&priv->napi);
-
 	rtl8196e_hw_init(&priv->hw);
 	rtl8196e_hw_set_rx_rings(&priv->hw,
 				   rtl8196e_ring_rx_pkthdr_base(priv->ring),
 				   rtl8196e_ring_rx_mbuf_base(priv->ring));
 	rtl8196e_hw_set_tx_ring(&priv->hw, rtl8196e_ring_tx_desc_base(priv->ring));
 	ret = rtl8196e_hw_init_phy(&priv->hw, priv->phy_port, priv->phy_id);
-	if (ret) {
-		napi_disable(&priv->napi);
+	if (ret)
 		return ret;
-	}
 	ret = rtl8196e_hw_vlan_setup(&priv->hw, priv->vlan_id, 0,
 				     priv->portmask | rtl8196e_cpu_port_mask,
 				     priv->iface.untag_ports);
 	if (ret) {
 		netdev_err(ndev, "VLAN setup failed (%d)\n", ret);
-		goto err_disable_napi;
+		return ret;
 	}
 	ret = rtl8196e_hw_netif_setup(&priv->hw, ndev->dev_addr,
 				      priv->vlan_id, ndev->mtu,
 				      priv->portmask | rtl8196e_cpu_port_mask);
 	if (ret) {
 		netdev_err(ndev, "NETIF setup failed (%d)\n", ret);
-		goto err_disable_napi;
+		return ret;
 	}
 	rtl8196e_hw_l2_setup(&priv->hw);
 	if (rtl8196e_force_trap) {
@@ -246,6 +244,7 @@ static int rtl8196e_open(struct net_device *ndev)
 		}
 	}
 	rtl8196e_hw_start(&priv->hw);
+	napi_enable(&priv->napi);
 	rtl8196e_hw_enable_irqs(&priv->hw);
 
 	netif_start_queue(ndev);
@@ -258,10 +257,6 @@ static int rtl8196e_open(struct net_device *ndev)
 		mod_timer(&priv->link_timer, jiffies + msecs_to_jiffies(priv->link_poll_ms));
 
 	return 0;
-
-err_disable_napi:
-	napi_disable(&priv->napi);
-	return ret;
 }
 
 /* Bring the interface down: stop queue, disable IRQs, stop HW, cancel timers. */
@@ -281,7 +276,7 @@ static int rtl8196e_stop(struct net_device *ndev)
 }
 
 /* Transmit a packet: linearize if needed, flush data cache, submit to TX ring. */
-static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
 	bool was_empty = false;
@@ -290,14 +285,28 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 
 	if (unlikely(!priv->ring || !priv->portmask)) {
 		dev_kfree_skb_any(skb);
+		ndev->stats.tx_dropped++;
 		return NETDEV_TX_OK;
 	}
 
 	if (unlikely(skb_is_nonlinear(skb))) {
 		if (skb_linearize(skb)) {
 			dev_kfree_skb_any(skb);
+			ndev->stats.tx_dropped++;
 			return NETDEV_TX_OK;
 		}
+	}
+
+	/*
+	 * Reclaim completed TX descriptors on every xmit call.
+	 * With TX_ALL_DONE IRQ disabled, this is the only reclaim path
+	 * for pure TX traffic (no RX IRQ to trigger NAPI reclaim).
+	 * When RX traffic is present, NAPI poll handles most reclaim
+	 * in batch; this call is then a fast no-op (cons == prod).
+	 */
+	{
+		unsigned int rpkts = 0, rbytes = 0;
+		rtl8196e_ring_tx_reclaim(priv->ring, &rpkts, &rbytes, 0);
 	}
 
 	/* Flush packet data (descriptor flushes done inside tx_submit) */
@@ -310,6 +319,7 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 					     priv->vlan_id, priv->portmask,
 					     PKTHDR_USED | PKT_OUTGOING,
 					     &was_empty);
+
 	if (unlikely(priv->tx_debug_once == 0)) {
 		priv->tx_debug_once = 1;
 		priv->tx_dbg_portmask = priv->portmask;
@@ -376,7 +386,7 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 }
 
 /* NAPI poll: drain RX ring up to budget, reclaim completed TX, wake queue if stalled. */
-static int rtl8196e_poll(struct napi_struct *napi, int budget)
+static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 {
 	struct rtl8196e_priv *priv = container_of(napi, struct rtl8196e_priv, napi);
 	unsigned int pkts = 0, bytes = 0;
@@ -395,7 +405,7 @@ static int rtl8196e_poll(struct napi_struct *napi, int budget)
 
 	if (work_done < budget) {
 		if (napi_complete_done(napi, work_done)) {
-			*(volatile u32 *)CPUIISR = PKTHDR_DESC_RUNOUT_IP_ALL | MBUF_DESC_RUNOUT_IP_ALL;
+			rtl8196e_writel(PKTHDR_DESC_RUNOUT_IP_ALL | MBUF_DESC_RUNOUT_IP_ALL, CPUIISR);
 			rtl8196e_hw_enable_irqs(&priv->hw);
 		}
 	}
@@ -404,20 +414,22 @@ static int rtl8196e_poll(struct napi_struct *napi, int budget)
 }
 
 /* Interrupt handler: read and clear CPUIISR, update link state, schedule NAPI. */
-static irqreturn_t rtl8196e_isr(int irq, void *dev_id)
+static __iram irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 {
 	struct net_device *ndev = dev_id;
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
 	u32 status;
 	bool link;
 
-	status = *(volatile u32 *)CPUIISR;
+	status = rtl8196e_readl(CPUIISR);
 	if (rtl8196e_debug && priv->dbg_irqs < 3) {
 		netdev_info(ndev, "dbg: ISR status=0x%08x\n", status);
 		priv->dbg_irqs++;
 	}
-	*(volatile u32 *)CPUIISR = status;
-	status &= *(volatile u32 *)CPUIIMR;
+	rtl8196e_writel(status, CPUIISR);
+	status &= rtl8196e_readl(CPUIIMR);
+	if (unlikely(!status))
+		return IRQ_NONE;
 
 	if (unlikely(status & LINK_CHANGE_IP)) {
 		link = rtl8196e_hw_link_up(&priv->hw, priv->phy_port);
@@ -427,7 +439,7 @@ static irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 			netif_carrier_off(ndev);
 	}
 
-	if (likely(status & (RX_DONE_IP_ALL | TX_ALL_DONE_IP_ALL | PKTHDR_DESC_RUNOUT_IP_ALL))) {
+	if (likely(status & (RX_DONE_IP_ALL | PKTHDR_DESC_RUNOUT_IP_ALL))) {
 		if (likely(napi_schedule_prep(&priv->napi))) {
 			rtl8196e_hw_disable_irqs(&priv->hw);
 			__napi_schedule(&priv->napi);
@@ -530,6 +542,14 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	if (priv->phy_port < 0) {
 		ret = -EINVAL;
 		goto err_free;
+	}
+
+	{
+		struct regmap *syscon;
+
+		syscon = syscon_regmap_lookup_by_phandle(pdev->dev.of_node,
+							 "realtek,syscon");
+		priv->hw.syscon = IS_ERR(syscon) ? NULL : syscon;
 	}
 
 	priv->ring = rtl8196e_ring_create(RTL8196E_TX_DESC,

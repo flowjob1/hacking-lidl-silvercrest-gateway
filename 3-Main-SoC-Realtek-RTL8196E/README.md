@@ -36,8 +36,8 @@ The **serialgateway** tool exposes the Zigbee serial port over TCP, allowing rem
 ### Get the Project
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/lidl-gateway-linux.git
-cd lidl-gateway-linux/3-Main-SoC-Realtek-RTL8196E
+git clone https://github.com/jnilo1/hacking-lidl-silvercrest-gateway.git
+cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
 ```
 
 ### Choose Your Path
@@ -67,21 +67,64 @@ cd lidl-gateway-linux/3-Main-SoC-Realtek-RTL8196E
 
 ### Flashing
 
-1. Connect to the gateway via serial (38400 8N1)
-2. Enter bootloader mode (press ESC during boot to get `<RealTek>` prompt)
-3. Run the flash script **from the repository root**:
+1. Connect to the gateway via serial (38400 8N1) — only needed for initial install with original Tuya bootloader
+2. Run the install script **from the repository root**:
 
 ```bash
-./flash_rtl8196e.sh              # Flash all partitions
+./flash_install_rtl8196e.sh      # Build fullflash.bin and install
 ```
 
-To flash individual partitions, use the scripts in each subdirectory:
+The script auto-detects the gateway state:
+- **Custom firmware running (SSH:22)** — automatic boothold + reboot + TFTP upload
+- **V2 bootloader** — automatic TFTP upload + auto-flash + reboot
+- **Old bootloader (Tuya/V1.2)** — TFTP upload + guided FLW on serial console
+
+To flash individual partitions (developers), use the scripts in each subdirectory:
 
 ```bash
-3-Main-SoC-Realtek-RTL8196E/32-Kernel/flash_kernel.sh
-3-Main-SoC-Realtek-RTL8196E/33-Rootfs/flash_rootfs.sh
-3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh
+cd 3-Main-SoC-Realtek-RTL8196E
+31-Bootloader/flash_bootloader.sh
+32-Kernel/flash_kernel.sh
+33-Rootfs/flash_rootfs.sh
+34-Userdata/flash_userdata.sh
 ```
+
+#### Remote Flashing (no serial console)
+
+`remote_flash.sh` handles everything over the network: SSH into the gateway, reboot to bootloader, wait, and flash — no serial console needed.
+
+```bash
+cd 3-Main-SoC-Realtek-RTL8196E
+./remote_flash.sh rootfs                    # Flash rootfs remotely
+./remote_flash.sh kernel                    # Flash kernel (auto-reboots)
+./remote_flash.sh bootloader                # Flash bootloader
+./remote_flash.sh userdata                  # Flash userdata (defaults: static IP, Zigbee)
+```
+
+Override defaults via environment variables:
+
+```bash
+./remote_flash.sh userdata                              # Static 192.168.1.88, Zigbee
+RADIO_MODE=thread ./remote_flash.sh userdata            # Static 192.168.1.88, Thread/OTBR
+IPADDR=10.0.0.50 ./remote_flash.sh userdata             # Custom IP, Zigbee
+NET_MODE=dhcp RADIO_MODE=thread ./remote_flash.sh userdata  # DHCP, Thread/OTBR
+```
+
+The individual flash scripts also support non-interactive use directly:
+
+```bash
+CONFIRM=y ./flash_rootfs.sh                             # Skip "Proceed?" prompt
+NET_MODE=static RADIO_MODE=zigbee CONFIRM=y ./flash_userdata.sh  # Full non-interactive
+```
+
+| Variable | Values | Default | Script |
+|----------|--------|---------|--------|
+| `CONFIRM` | `y` | *(interactive prompt)* | all |
+| `NET_MODE` | `static`, `dhcp` | *(interactive prompt)* | flash_userdata.sh |
+| `RADIO_MODE` | `zigbee`, `thread` | *(interactive prompt)* | flash_userdata.sh |
+| `IPADDR` | IP address | `192.168.1.88` | flash_userdata.sh |
+| `NETMASK` | Netmask | `255.255.255.0` | flash_userdata.sh |
+| `GATEWAY` | Gateway IP | `192.168.1.1` | flash_userdata.sh |
 
 ### After Flashing
 

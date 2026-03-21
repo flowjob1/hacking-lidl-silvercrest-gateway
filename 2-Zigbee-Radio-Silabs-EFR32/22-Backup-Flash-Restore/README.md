@@ -117,6 +117,10 @@ See [35-Migration](../../3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details 
 
 `universal-silabs-flasher` is a Python tool by NabuCasa that flashes Silicon Labs chips over UART without a J-Link debugger. It works by communicating with the **Gecko Bootloader** that is pre-installed on the EFR32.
 
+> For a deep dive into how USF works over TCP, why baud rate recovery is
+> tricky, and how `flash_efr32.sh` handles it, see
+> [MEMO-universal-silabs-flasher.md](MEMO-universal-silabs-flasher.md).
+
 ### Architecture
 
 ```
@@ -127,7 +131,7 @@ See [35-Migration](../../3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details 
 Your PC                          Gateway                         EFR32
 ───────                          ───────                         ─────
     │                                │                              │
-    │  socket://192.168.1.X:8888     │                              │
+    │  socket://192.168.1.88:8888     │                              │
     ├───────────────────────────────>│      serialgateway           │
     │                                │        (TCP↔UART)            │
     │                                │                              │

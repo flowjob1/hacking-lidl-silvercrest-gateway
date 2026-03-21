@@ -10,8 +10,23 @@
 # Note: The Gecko Bootloader (stage 2) is rarely reflashed — only use [1] if
 # you need to update the bootloader itself (e.g., after an SDK upgrade).
 #
+# Baud rate: All pre-built firmware runs at 115200 (matching the Gecko
+# Bootloader). If you recompile at a different baud rate (e.g., 230400),
+# this script will automatically detect it, force the EFR32 into the Gecko
+# Bootloader, and flash over it — no J-Link/SWD needed.
+#
 # Usage: ./flash_efr32.sh [GATEWAY_IP]
 #   GATEWAY_IP - Gateway IP address (default: 192.168.1.88)
+#
+# Environment variables (optional, for non-interactive use):
+#   FW_CHOICE  - Firmware to flash: 1=Bootloader, 2=NCP (default), 3=RCP,
+#                4=OT-RCP, 5=Z3-Router
+#   CONFIRM    - Set to "y" to skip the "Flash?" prompt
+#
+# Examples:
+#   ./flash_efr32.sh                          # Interactive menu
+#   FW_CHOICE=2 CONFIRM=y ./flash_efr32.sh    # Flash NCP non-interactively
+#   FW_CHOICE=4 CONFIRM=y ./flash_efr32.sh    # Flash OT-RCP non-interactively
 #
 # J. Nilo - February 2026
 
@@ -34,7 +49,7 @@ GW_IP="${1:-192.168.1.88}"
 GW_PORT=8888
 VENV_DIR="${SCRIPT_DIR}/silabs-flasher"
 
-SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
+SSH_OPTS="-n -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 SSH="ssh $SSH_OPTS root@${GW_IP}"
 SSH_RETRIES=3
 
@@ -50,16 +65,20 @@ FW_ROUTER="${FW_DIR}/27-Router/firmware/z3-router-7.5.1.gbl"
 
 # --- Firmware selection menu -----------------------------------------------
 
-echo "EFR32 Firmware Flasher"
-echo ""
-echo "  [1] Bootloader    — Gecko Bootloader stage 2 (UART/Xmodem)   ($(basename "$FW_BTL"))"
-echo "  [2] NCP-UART-HW   — Zigbee NCP for zigbee2mqtt / ZHA         ($(basename "$FW_NCP"))"
-echo "  [3] RCP-UART-HW   — Multi-PAN RCP for zigbee2mqtt            ($(basename "$FW_RCP"))"
-echo "  [4] OT-RCP        — OpenThread RCP for otbr-agent            ($(basename "$FW_OT_RCP"))"
-echo "  [5] Z3-Router     — Zigbee 3.0 standalone router             ($(basename "$FW_ROUTER"))"
-echo ""
-read -r -p "Firmware to flash [2]: " fw_choice
-fw_choice="${fw_choice:-2}"
+if [ -n "${FW_CHOICE:-}" ]; then
+    fw_choice="$FW_CHOICE"
+else
+    echo "EFR32 Firmware Flasher"
+    echo ""
+    echo "  [1] Bootloader    — Gecko Bootloader stage 2 (UART/Xmodem)   ($(basename "$FW_BTL"))"
+    echo "  [2] NCP-UART-HW   — Zigbee NCP for zigbee2mqtt / ZHA         ($(basename "$FW_NCP"))"
+    echo "  [3] RCP-UART-HW   — Multi-PAN RCP for zigbee2mqtt            ($(basename "$FW_RCP"))"
+    echo "  [4] OT-RCP        — OpenThread RCP for otbr-agent            ($(basename "$FW_OT_RCP"))"
+    echo "  [5] Z3-Router     — Zigbee 3.0 standalone router             ($(basename "$FW_ROUTER"))"
+    echo ""
+    read -r -p "Firmware to flash [2]: " fw_choice
+    fw_choice="${fw_choice:-2}"
+fi
 
 case "$fw_choice" in
     1) FIRMWARE="$FW_BTL" ;;
@@ -95,7 +114,15 @@ else
     python3 -m venv "$VENV_DIR"
     "${VENV_DIR}/bin/pip" install --quiet universal-silabs-flasher
     FLASHER="${VENV_DIR}/bin/universal-silabs-flasher"
-    echo "Installed."
+    # Patch USF to probe Spinel/EZSP at 115200/230400 (upstream only probes
+    # Spinel at 460800 and EZSP at 115200/460800 — misses our common bauds)
+    USF_CONST=$(find "$VENV_DIR" -path '*/universal_silabs_flasher/const.py' -print -quit)
+    if [ -n "$USF_CONST" ] && patch --dry-run -f "$USF_CONST" "$SCRIPT_DIR/silabs-flasher-probe-methods.patch" >/dev/null 2>&1; then
+        patch -f "$USF_CONST" "$SCRIPT_DIR/silabs-flasher-probe-methods.patch" >/dev/null
+        echo "Installed (patched probe methods)."
+    else
+        echo "Installed."
+    fi
 fi
 echo ""
 
@@ -119,11 +146,13 @@ echo ""
 
 # --- 3. Flash ---------------------------------------------------------------
 
-read -r -p "Flash $(basename "$FIRMWARE") to ${GW_IP}? [y/N] " confirm
-if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-    echo "Aborted."
-    $SSH "reboot" 2>/dev/null || true
-    exit 0
+if [ "${CONFIRM:-}" != "y" ]; then
+    read -r -p "Flash $(basename "$FIRMWARE") to ${GW_IP}? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        echo "Aborted."
+        $SSH "reboot" 2>/dev/null || true
+        exit 0
+    fi
 fi
 
 echo ""
@@ -169,15 +198,56 @@ if [ "$FIRMWARE" = "$FW_BTL" ]; then
         exit 1
     fi
 else
-    # Normal firmware flash: run USF directly so the progress bar works.
+    # Normal firmware flash: try with serialgateway at 115200 (default).
     if ! "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE"; then
+        # Standard flash failed. The EFR32 firmware may be running at a
+        # non-standard baud rate (e.g., after a custom build at 230400).
+        # Over TCP, USF's baud rate parameter is ignored — serialgateway
+        # controls the UART speed. We restart serialgateway at each
+        # candidate baud and let USF flash again: it will detect the
+        # firmware, send enter_bootloader, then fail (Gecko Bootloader
+        # starts at 115200 but serialgateway is still at the app baud).
+        # We then restart serialgateway at 115200 and flash via bootloader.
         echo ""
-        echo "Flash failed."
-        echo ""
-        echo "Check that serialgateway is running in flash mode and the gateway is"
-        echo "reachable on ${GW_IP}:${GW_PORT}."
-        $SSH "reboot" 2>/dev/null || true
-        exit 1
+        echo "Standard flash failed. Scanning for firmware at other baud rates..."
+
+        RECOVERED=false
+        for BAUD in 230400 460800; do
+            echo "  Trying ${BAUD} baud..."
+            $SSH "killall serialgateway 2>/dev/null || true; serialgateway -b ${BAUD} -f"
+            sleep 1
+
+            # USF detects firmware, sends enter_bootloader, then fails
+            # on the bootloader probe (baud mismatch).
+            FLASH_OUT=$("$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" \
+                flash --firmware "$FIRMWARE" 2>&1) || true
+
+            if echo "$FLASH_OUT" | grep -q "Detected"; then
+                echo "$FLASH_OUT" | grep "Detected"
+                echo ""
+                echo "Restarting serialgateway at 115200 for Gecko Bootloader..."
+                $SSH "killall serialgateway 2>/dev/null || true; serialgateway -f"
+                sleep 1
+
+                echo "Flashing via Gecko Bootloader..."
+                if "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" \
+                    --probe-methods "bootloader:115200" \
+                    flash --firmware "$FIRMWARE"; then
+                    RECOVERED=true
+                fi
+                break
+            fi
+        done
+
+        if [ "$RECOVERED" != "true" ]; then
+            echo ""
+            echo "Flash failed."
+            echo ""
+            echo "Could not detect firmware at any known baud rate (115200, 230400, 460800)."
+            echo "You may need a J-Link/SWD debugger to recover."
+            $SSH "reboot" 2>/dev/null || true
+            exit 1
+        fi
     fi
 fi
 

@@ -8,20 +8,10 @@
  */
 #include <linux/delay.h>
 #include <linux/errno.h>
+#include <linux/regmap.h>
 #include <linux/string.h>
 #include "rtl8196e_hw.h"
 
-/* Write a 32-bit value to an MMIO-mapped register. */
-static inline void rtl8196e_writel(u32 val, u32 reg)
-{
-	*(volatile u32 *)(reg) = val;
-}
-
-/* Read a 32-bit value from an MMIO-mapped register. */
-static inline u32 rtl8196e_readl(u32 reg)
-{
-	return *(volatile u32 *)(reg);
-}
 
 /* Poll MDCIOSR until the MDC/MDIO bus is idle; return -ETIMEDOUT on failure. */
 static int rtl8196e_mdio_wait_ready(void)
@@ -303,10 +293,8 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	u32 clk;
 	int ret;
 
-	(void)hw;
-
 	/*
-	 * Configure pin mux for MII mode (same as legacy SDK driver).
+	 * Configure pin mux for MII mode via syscon regmap.
 	 * Without this, bootloader defaults leave pins muxed to functions
 	 * that drive EFR32 nRST LOW, preventing the Zigbee radio from
 	 * operating.
@@ -314,14 +302,18 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	 * Bits [4:3] are the UART1 TXD mux field — set to 01 (UART1)
 	 * rather than clearing to 00, matching the vendor BSP sequence.
 	 */
-	rtl8196e_writel((rtl8196e_readl(PIN_MUX_SEL) &
-			~((3 << 8) | (3 << 10) | (3 << 3) | (1 << 15))) |
-			(1 << 3),
-			PIN_MUX_SEL);
-	rtl8196e_writel(rtl8196e_readl(PIN_MUX_SEL2) &
-			~((3 << 0) | (3 << 3) | (3 << 6) | (3 << 9) |
-			  (3 << 12) | (7 << 15)),
-			PIN_MUX_SEL2);
+	if (hw->syscon) {
+		/* PIN_MUX_SEL: bits [4:3]=01 (UART1), clear bits 8-10,15 */
+		regmap_update_bits(hw->syscon, 0x40,
+				   (3 << 8) | (3 << 10) | (3 << 3) | (1 << 15),
+				   (1 << 3));
+		/* PIN_MUX_SEL2: clear MII/nRST bits, preserve bits [4:3]
+		 * (GPIO 11 / Port B3 — status LED via gpio-leds) */
+		regmap_update_bits(hw->syscon, 0x44,
+				   (3 << 0) | (3 << 6) | (3 << 9) |
+				   (3 << 12) | (7 << 15),
+				   0);
+	}
 
 	/* Ensure switch core clock is active (vendor sequence) */
 	clk = rtl8196e_readl(SYS_CLK_MAG);
@@ -724,27 +716,37 @@ void rtl8196e_hw_stop(struct rtl8196e_hw *hw)
 /* Program all six CPURPDCR registers with the RX pkthdr ring base and CPURMDCR0 with mbuf base. */
 void rtl8196e_hw_set_rx_rings(struct rtl8196e_hw *hw, void *pkthdr, void *mbuf)
 {
+	/*
+	 * Callers pass KSEG1 (uncached) pointers from rtl8196e_alloc_uncached().
+	 * Do NOT apply rtl8196e_uncached_addr() again — the OR is idempotent
+	 * but masks a conceptual error about who owns the address conversion.
+	 */
 	(void)hw;
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR0);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR1);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR2);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR3);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR4);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR5);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(mbuf), CPURMDCR0);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR0);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR1);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR2);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR3);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR4);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR5);
+	rtl8196e_writel((u32)mbuf, CPURMDCR0);
 }
 
 /* Program CPUTPDCR0 with the TX pkthdr ring base address. */
 void rtl8196e_hw_set_tx_ring(struct rtl8196e_hw *hw, void *pkthdr)
 {
+	/* Caller passes a KSEG1 pointer — do not double-convert */
 	(void)hw;
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPUTPDCR0);
+	rtl8196e_writel((u32)pkthdr, CPUTPDCR0);
 }
 
-/* Unmask RX done, TX done, link change and descriptor runout interrupts in CPUIIMR. */
+/*
+ * Unmask RX done, link change and descriptor runout interrupts in CPUIIMR.
+ * TX_ALL_DONE is intentionally NOT masked — TX reclaim is done in software
+ * (in NAPI poll and start_xmit) to avoid one IRQ per TX completion.
+ */
 void rtl8196e_hw_enable_irqs(struct rtl8196e_hw *hw)
 {
-	u32 mask = RX_DONE_IE_ALL | TX_ALL_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL;
+	u32 mask = RX_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL;
 	(void)hw;
 	rtl8196e_writel(mask, CPUIIMR);
 }

@@ -8,6 +8,7 @@
 #   IMAGE - Image file (default: boot.bin)
 #
 # Environment variables (optional overrides):
+#   CONFIRM        - Set to "y" to skip the "Proceed?" prompt
 #   TRIES          - ARP probe attempts (default: 10)
 #   PORT           - UDP port used to trigger ARP (default: 69)
 #   SLEEP_BETWEEN  - Pause between ARP probes in seconds (default: 0.2)
@@ -15,6 +16,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Check prerequisites
+tftp_usage="$(tftp --help 2>&1 || true)"
+if ! command -v tftp >/dev/null 2>&1 || ! echo "$tftp_usage" | grep -q '\-c'; then
+    echo "Error: tftp-hpa client not found (need the -c flag)." >&2
+    echo "Install it with: sudo apt install tftp-hpa" >&2
+    exit 1
+fi
+if ! command -v nc >/dev/null 2>&1; then
+    echo "Error: netcat (nc) not found." >&2
+    echo "Install it with: sudo apt install netcat-openbsd" >&2
+    exit 1
+fi
 
 TARGET_IP="${1:-192.168.1.6}"
 IMAGE="${2:-${SCRIPT_DIR}/boot.bin}"
@@ -102,20 +116,49 @@ fi
 
 echo "Flashing ${NAME} (${SIZE} bytes) to ${TARGET_IP}..."
 echo ""
-read -r -p "Proceed? [y/N] " confirm
-if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-    echo "Aborted."
-    exit 0
+if [ "${CONFIRM:-}" != "y" ]; then
+    read -r -p "Proceed? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
 fi
 
+NOTIFY_PORT=9999
+NOTIFY_TMO=30
+
+notify_file=$(mktemp)
+(timeout "$NOTIFY_TMO" nc -u -l -p "$NOTIFY_PORT" > "$notify_file" 2>/dev/null) &
+nc_pid=$!
+sleep 0.2
+
+echo "Uploading..."
 cd "$SCRIPT_DIR"
 out=$(timeout 15 tftp -m binary "$TARGET_IP" -c put "$NAME" 2>&1) || true
 if echo "$out" | grep -qiE \
     "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+    kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null; rm -f "$notify_file"
     echo "Error: transfer failed: $out" >&2
     exit 1
 fi
+echo "Uploaded. Waiting for flash write..."
+while kill -0 "$nc_pid" 2>/dev/null; do
+    [ -s "$notify_file" ] && { kill "$nc_pid" 2>/dev/null; break; }
+    sleep 0.5
+done
+wait "$nc_pid" 2>/dev/null || true
+result=$(tr -d '\0' < "$notify_file")
+rm -f "$notify_file"
 
+if [ "$result" = "OK" ]; then
+    echo "Flash Write Succeeded."
+elif [ "$result" = "FAIL" ]; then
+    echo "Error: flash write FAILED on gateway." >&2
+    exit 1
+else
+    echo "Warning: no notification received (timeout ${NOTIFY_TMO}s)." >&2
+    echo "Check the serial console for status."
+fi
 echo ""
 echo "Done."
 echo "Reboot: J BFC00000  (serial console)  or  hard reset the device"

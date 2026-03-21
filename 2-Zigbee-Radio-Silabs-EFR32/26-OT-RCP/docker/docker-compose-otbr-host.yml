@@ -1,0 +1,80 @@
+# Use case 2: OTBR on host — Thread/Matter with OTBR running on your PC
+#
+# Stack: OTBR (Docker) + Matter Server + Home Assistant
+# The gateway runs serialgateway only — OTBR runs here on the host.
+#
+# See also:
+#   docker-compose-zoh.yml          — Use case 1: Zigbee (zigbee-on-host)
+#   docker-compose-otbr-gateway.yml — Use case 3: OTBR on gateway (v2.0+)
+#
+# Usage:
+#   1. Flash ot-rcp.gbl to the EFR32, flash userdata in Zigbee mode
+#   2. Ensure serialgateway is running on the gateway (port 8888, 115200 baud)
+#   3. Edit RCP_HOST and OTBR_BACKBONE_IF below
+#   4. docker compose -f docker-compose-otbr-host.yml up -d
+#   5. Open Home Assistant at http://localhost:8123
+#   6. Add integrations: OTBR (localhost:8081) + Matter (localhost:5580)
+#   7. Commission Matter devices via Settings → Devices → Add Device → Matter
+
+services:
+  # OpenThread Border Router — connects to OT-RCP via serialgateway
+  otbr:
+    container_name: otbr
+    image: bnutzer/otbr-tcp
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/net/tun
+    environment:
+      # ============================================================
+      # REQUIRED: Set this to your Lidl gateway's IP address
+      # The gateway must be running serialgateway on port 8888
+      # ============================================================
+      - RCP_HOST=192.168.1.88   # ← Your gateway's IP (default)
+      - RCP_PORT=8888
+      - RCP_BAUDRATE=115200
+      # ============================================================
+      # Thread/OTBR configuration
+      - OTBR_LOG_LEVEL_INT=6
+      - OTBR_WEB_ENABLE=1
+      - OTBR_WEB_PORT=8080
+      - OTBR_REST_LISTEN_PORT=8081
+      - OTBR_BACKBONE_IF=enp2s0
+    volumes:
+      - otbr_data:/var/lib/thread
+
+  # Python Matter Server — Matter fabric controller
+  # Needs D-Bus for BLE commissioning
+  matter-server:
+    container_name: matter-server
+    image: ghcr.io/matter-js/python-matter-server:stable
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    security_opt:
+      - apparmor=unconfined
+    volumes:
+      - matter_data:/data
+      - /run/dbus:/run/dbus:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    environment:
+      - TZ=Europe/Paris
+
+  # Home Assistant — UI for commissioning and device management
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - ha_config:/config
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - TZ=Europe/Paris
+
+volumes:
+  otbr_data:
+  matter_data:
+  ha_config:

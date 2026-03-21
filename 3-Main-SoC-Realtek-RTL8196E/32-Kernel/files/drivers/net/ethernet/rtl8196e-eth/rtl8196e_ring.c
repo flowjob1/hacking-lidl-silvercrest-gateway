@@ -13,9 +13,13 @@
 #include <linux/skbuff.h>
 #include <linux/kernel.h>
 #include <asm/io.h>
+#include <asm/mach-realtek/imem.h>
 #include "rtl8196e_ring.h"
 #include "rtl8196e_regs.h"
 
+/* Single-producer (xmit) / single-consumer (NAPI) ring.
+ * tx_prod and tx_cons are accessed from different contexts;
+ * use READ_ONCE/WRITE_ONCE to prevent compiler tearing. */
 struct rtl8196e_ring {
 	u32 *tx_ring;
 	u32 *rx_pkthdr_ring;
@@ -44,7 +48,7 @@ struct rtl8196e_ring {
 /* Allocate @size bytes, store the original pointer in *orig_out, return KSEG1 address. */
 static void *rtl8196e_alloc_uncached(size_t size, void **orig_out)
 {
-	void *p = kmalloc(size, GFP_ATOMIC);
+	void *p = kmalloc(size, GFP_KERNEL);
 	if (!p)
 		return NULL;
 	if (orig_out)
@@ -93,13 +97,13 @@ struct rtl8196e_ring *rtl8196e_ring_create(unsigned int tx_cnt,
 	mbuf_cnt = tx_cnt + rx_mbuf_cnt;
 
 	alloc_size = pkthdr_cnt * sizeof(struct rtl_pktHdr) + L1_CACHE_BYTES;
-	ring->pkthdr_alloc = kmalloc(alloc_size, GFP_ATOMIC);
+	ring->pkthdr_alloc = kmalloc(alloc_size, GFP_KERNEL);
 	if (!ring->pkthdr_alloc)
 		goto err;
 	ring->pkthdr_pool = (struct rtl_pktHdr *)ALIGN((unsigned long)ring->pkthdr_alloc, L1_CACHE_BYTES);
 
 	alloc_size = mbuf_cnt * sizeof(struct rtl_mBuf) + L1_CACHE_BYTES;
-	ring->mbuf_alloc = kmalloc(alloc_size, GFP_ATOMIC);
+	ring->mbuf_alloc = kmalloc(alloc_size, GFP_KERNEL);
 	if (!ring->mbuf_alloc)
 		goto err;
 	ring->mbuf_pool = (struct rtl_mBuf *)ALIGN((unsigned long)ring->mbuf_alloc, L1_CACHE_BYTES);
@@ -246,7 +250,7 @@ void *rtl8196e_ring_rx_mbuf_base(struct rtl8196e_ring *ring)
 }
 
 /* Fill the next TX descriptor with @skb's data and hand ownership to the hardware. */
-int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
+__iram int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 				   void *data, unsigned int len,
 				   u16 vid, u16 portlist, u16 flags,
 				   bool *was_empty)
@@ -267,7 +271,7 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	if (next >= ring->tx_cnt)
 		next = 0;
 
-	if (unlikely(next == ring->tx_cons))
+	if (unlikely(next == READ_ONCE(ring->tx_cons)))
 		return -ENOSPC;
 
 	if (was_empty)
@@ -299,13 +303,13 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 					(ring->tx_ring[ring->tx_prod] & RTL8196E_DESC_WRAP);
 	wmb();
 
-	ring->tx_prod = next;
+	WRITE_ONCE(ring->tx_prod, next);
 
 	return 0;
 }
 
 /* Walk the TX consumer ring, free completed SKBs, return the number of packets reclaimed. */
-int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
+__iram int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *pkts,
 				    unsigned int *bytes,
 				    int napi_budget)
@@ -316,7 +320,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 	if (unlikely(!ring))
 		return 0;
 
-	while (ring->tx_cons != ring->tx_prod) {
+	while (ring->tx_cons != READ_ONCE(ring->tx_prod)) {
 		u32 entry;
 		struct rtl_pktHdr *ph;
 		struct rtl_mBuf *mb;
@@ -341,9 +345,12 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 			mb->skb = NULL;
 		}
 
-		ring->tx_cons++;
-		if (ring->tx_cons >= ring->tx_cnt)
-			ring->tx_cons = 0;
+		{
+			unsigned int next_cons = ring->tx_cons + 1;
+			if (next_cons >= ring->tx_cnt)
+				next_cons = 0;
+			WRITE_ONCE(ring->tx_cons, next_cons);
+		}
 	}
 
 	if (pkts)
@@ -355,7 +362,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 }
 
 /* NAPI RX poll: process up to @budget received packets and hand them to the stack. */
-int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
+__iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct napi_struct *napi,
 				 struct net_device *dev)
 {
@@ -429,6 +436,7 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		ph->ph_flags = PKTHDR_USED | PKT_INCOMING;
 
 		napi_gro_receive(napi, skb);
+
 		work_done++;
 		goto rearm;
 
@@ -465,23 +473,27 @@ rearm:
 }
 
 /* Return the number of free TX descriptor slots available for new submissions. */
-int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
+__iram int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
 {
 	int used;
 
 	if (!ring || ring->tx_cnt == 0)
 		return 0;
 
-	if (ring->tx_prod >= ring->tx_cons)
-		used = ring->tx_prod - ring->tx_cons;
-	else
-		used = ring->tx_cnt - ring->tx_cons + ring->tx_prod;
+	{
+		unsigned int prod = READ_ONCE(ring->tx_prod);
+		unsigned int cons = READ_ONCE(ring->tx_cons);
+		if (prod >= cons)
+			used = prod - cons;
+		else
+			used = ring->tx_cnt - cons + prod;
+	}
 
 	return (int)ring->tx_cnt - 1 - used;
 }
 
 /* Pulse the TXFD bit in CPUICR to trigger the TX DMA fetch engine. */
-void rtl8196e_ring_kick_tx(bool was_empty)
+__iram void rtl8196e_ring_kick_tx(bool was_empty)
 {
 	u32 icr;
 

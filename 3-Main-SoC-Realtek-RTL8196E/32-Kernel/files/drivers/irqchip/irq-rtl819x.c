@@ -24,21 +24,23 @@
 #include <linux/irq.h>
 #include <linux/irqdomain.h>
 #include <linux/irqchip.h>
+#include <linux/irqchip/chained_irq.h>
 #include <linux/kernel.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/io.h>
+#include <asm/mach-realtek/imem.h>
 
 /* ========================================================================== */
 /* Hardware Definitions */
 /* ========================================================================== */
 
-static void __iomem *_intc_membase;
+static void __iomem *rtl819x_intc_base;
 static DEFINE_RAW_SPINLOCK(intc_lock);  /* Protects GIMR read-modify-write */
 
-#define ic_w32(val, reg)        __raw_writel(val, _intc_membase + reg)
-#define ic_r32(reg)             __raw_readl(_intc_membase + reg)
+#define ic_w32(val, reg)        writel(val, rtl819x_intc_base + reg)
+#define ic_r32(reg)             readl(rtl819x_intc_base + reg)
 
 /* Interrupt Controller Registers */
 #define REALTEK_IC_REG_MASK         0x00    /* GIMR - Global Interrupt Mask */
@@ -191,25 +193,29 @@ static struct irq_chip realtek_soc_irq_chip = {
  * Handles multiple simultaneous interrupts. Uses cached virtual IRQs
  * for frequently-used interrupts (Switch, UARTs) to avoid lookup overhead.
  */
-static void realtek_soc_irq_handler(struct irq_desc *desc)
+static __iram void realtek_soc_irq_handler(struct irq_desc *desc)
 {
+    struct irq_chip *chip = irq_desc_get_chip(desc);
     struct irq_domain *domain = irq_desc_get_handler_data(desc);
     u32 mask, status, pending;
+
+    chained_irq_enter(chip, desc);
 
     /* Read interrupt state */
     mask = ic_r32(REALTEK_IC_REG_MASK);
     status = ic_r32(REALTEK_IC_REG_STATUS);
     pending = mask & status;
 
-    if (unlikely(!pending))
-        return;
-
-    /* Process all pending interrupts */
+    /* Spurious: no pending bits after masking — skip loop, still call exit */
     while (pending) {
         int bit = __ffs(pending);
         unsigned int virq = 0;
 
-        /* Acknowledge interrupt in hardware */
+        /*
+         * Clear pending latch in GISR. For level-triggered sources (e.g. switch),
+         * the bit will be re-asserted by hardware if the source is still active.
+         * The peripheral handler must drain the source to stop re-triggering.
+         */
         ic_w32(BIT(bit), REALTEK_IC_REG_STATUS);
 
         /*
@@ -239,6 +245,8 @@ static void realtek_soc_irq_handler(struct irq_desc *desc)
 
         pending &= ~BIT(bit);
     }
+
+    chained_irq_exit(chip, desc);
 }
 
 /* ========================================================================== */
@@ -280,10 +288,18 @@ static int intc_map(struct irq_domain *d, unsigned int irq, irq_hw_number_t hw)
     return 0;
 }
 
+static void intc_unmap(struct irq_domain *d, unsigned int irq)
+{
+    if (irq == switch_virq) switch_virq = 0;
+    else if (irq == uart0_virq) uart0_virq = 0;
+    else if (irq == uart1_virq) uart1_virq = 0;
+}
+
 /* IRQ domain operations */
 static const struct irq_domain_ops irq_domain_ops = {
     .xlate = irq_domain_xlate_onecell,
     .map = intc_map,
+    .unmap = intc_unmap,
 };
 
 /* ========================================================================== */
@@ -313,8 +329,8 @@ static int __init intc_of_init(struct device_node *node, struct device_node *par
         return ret;
     }
 
-    _intc_membase = ioremap(res.start, resource_size(&res));
-    if (!_intc_membase) {
+    rtl819x_intc_base = ioremap(res.start, resource_size(&res));
+    if (!rtl819x_intc_base) {
         pr_err("RTL8196E INTC: Failed to map registers at %pa\n", &res.start);
         return -ENOMEM;
     }
@@ -324,15 +340,6 @@ static int __init intc_of_init(struct device_node *node, struct device_node *par
 
     /* Configure interrupt routing */
     realtek_soc_irq_init();
-
-    /* Enable interrupts in GIMR: Timer0, UART0, UART1, Switch */
-    ic_w32(BIT(REALTEK_HW_TC0_BIT) |
-           BIT(REALTEK_HW_UART0_BIT) |
-           BIT(REALTEK_HW_UART1_BIT) |
-           BIT(REALTEK_HW_SW_CORE_BIT),
-           REALTEK_IC_REG_MASK);
-
-    pr_debug("RTL8196E INTC: Enabled interrupts - Timer, UART0, UART1, Switch\n");
 
     /* Create IRQ domain */
     domain = irq_domain_add_legacy(node, REALTEK_INTC_IRQ_COUNT,
@@ -352,12 +359,19 @@ static int __init intc_of_init(struct device_node *node, struct device_node *par
     irq_set_chained_handler_and_data(REALTEK_CPU_IRQ_SWITCH,
                                     realtek_soc_irq_handler, domain);
 
+    /* Enable HW interrupts only after handlers are installed */
+    ic_w32(BIT(REALTEK_HW_TC0_BIT) |
+           BIT(REALTEK_HW_UART0_BIT) |
+           BIT(REALTEK_HW_UART1_BIT) |
+           BIT(REALTEK_HW_SW_CORE_BIT),
+           REALTEK_IC_REG_MASK);
+
     pr_info("RTL8196E INTC: Initialized (Timer:IP7, Switch:IP4, UART1:IP3, UART0:IP2)\n");
 
     return 0;
 
 err_iounmap:
-    iounmap(_intc_membase);
+    iounmap(rtl819x_intc_base);
     return ret;
 }
 

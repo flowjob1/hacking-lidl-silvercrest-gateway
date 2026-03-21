@@ -2,7 +2,7 @@
 
 This directory contains everything needed to build a modern Linux kernel for the Realtek RTL8196E gateway.
 
-**Current version**: [Linux 5.10.246](https://lwn.net/Articles/1043999/) (29 octobre 2025)
+**Current version**: [Linux 5.10.246](https://lwn.net/Articles/1043999/) (29 October 2025)
 
 ## Why Linux 5.10?
 
@@ -79,8 +79,8 @@ The kernel uses the in-tree `arch/mips/boot/compressed/` (zboot) decompressor ‚Ä
 - Lexra MIPS support (no ll/sc instructions)
 - RTL8196E SoC and board support
 - SPI flash driver
-- Ethernet driver
-- GPIO and LED support
+- Ethernet driver (PIN_MUX_SEL2 preserves GPIO 11 bits for status LED)
+- GPIO and LED support (gpio-leds DT binding, `/sys/class/leds/status/`)
 
 ## üôè Credits
 
