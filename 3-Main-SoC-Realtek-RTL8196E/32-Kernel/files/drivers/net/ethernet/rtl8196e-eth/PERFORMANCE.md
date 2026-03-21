@@ -5,47 +5,57 @@
 ### Test conditions
 
 - Ubuntu 22.04 host, gateway 192.168.1.126, iperf 2.x
+- **Direct connection**: short Cat 6 cable between host and gateway (no switch,
+  no router).  Throughput drops up to 60% when tested through a LAN with
+  switches or consumer routers due to buffering, QoS, and store-and-forward
+  latency on the intermediate hops.
 - TCP tests: 30 s per run; stress test: 300 s
 - Kernels: 5.10.246-rtl8196e-eth (new) / 5.10.246-rtl8196e (legacy)
-- rtl8196e-eth measured 2026-02-22; rtl819x measured 2026-02-23
+- rtl8196e-eth v1.0 measured 2026-02-22; v1.1 measured 2026-02-28; rtl819x measured 2026-02-23
+- v1.1 adds PIN_MUX_SEL/SEL2 clearing (fixes EFR32 nRST, also cleans up MII pin mux)
+- v1.2 fixes PIN_MUX_SEL UART1 pin mux (fixes universal-silabs-flasher probe)
 
 ### TCP throughput
 
-| Test                      | rtl819x (legacy) | rtl8196e-eth v1.0 | Delta              |
-|---------------------------|------------------|-------------------|--------------------|
-| TCP RX (host→gw, 30s)     | 85.7 Mbps        | **91.2 Mbps**     | +5.5 Mbps (+6.4%)  |
-| TCP TX (gw→host, 30s)     | 43.4 Mbps        | **46.9 Mbps**     | +3.5 Mbps (+8.1%)  |
-| TCP Parallel 4 streams    | 90.0 Mbps        | **94.6 Mbps**     | +4.6 Mbps (+5.1%)  |
-| TCP Parallel 8 streams    | 70.0 Mbps        | **70.9 Mbps**     | +0.9 Mbps (+1.3%)  |
-| TCP Stress 300s           | 88.8 Mbps        | **92.0 Mbps**     | +3.2 Mbps (+3.6%)  |
+| Test                      | rtl819x (legacy) | rtl8196e-eth v1.0 | rtl8196e-eth v1.1 | Delta (v1.1 vs legacy) |
+|---------------------------|------------------|-------------------|-------------------|------------------------|
+| TCP RX (host→gw, 30s)     | 85.7 Mbps        | 91.2 Mbps         | **91.6 Mbps**     | +5.9 Mbps (+6.9%)      |
+| TCP TX (gw→host, 30s)     | 43.4 Mbps        | 46.9 Mbps         | **49.2 Mbps**     | +5.8 Mbps (+13.4%)     |
+| TCP Parallel 4 streams    | 90.0 Mbps        | 94.6 Mbps         | **94.7 Mbps**     | +4.7 Mbps (+5.2%)      |
+| TCP Parallel 8 streams    | 70.0 Mbps        | 70.9 Mbps         | **67.4 Mbps**     | -2.6 Mbps (-3.7%)      |
+| TCP Stress 300s           | 88.8 Mbps        | 92.0 Mbps         | **92.0 Mbps**     | +3.2 Mbps (+3.6%)      |
 
-The new driver is consistently faster on all TCP tests (+6% RX, +8% TX on single-stream).
+The new driver is consistently faster on all single-stream TCP tests.
+v1.1 shows a notable TX improvement (+13.4% vs legacy, +4.9% vs v1.0) —
+clearing PIN_MUX_SEL2 removes pin contention on the MII bus.
+The 8-stream result varies between runs (measurement noise at high contention).
 
 ### Driver error counters (full test session)
 
-| Counter                    | rtl819x | rtl8196e-eth |
-|----------------------------|---------|--------------|
-| RX errors                  | 0       | 0            |
-| TX errors                  | 0       | 0            |
-| RX dropped                 | 5       | 6            |
-| TX dropped                 | 0       | 0            |
-| TCP RetransSegs (SoC side) | 0       | 0            |
+| Counter                    | rtl819x | rtl8196e-eth v1.0 | rtl8196e-eth v1.1 |
+|----------------------------|---------|-------------------|--------------------|
+| RX errors                  | 0       | 0                 | 0                  |
+| TX errors                  | 0       | 0                 | 0                  |
+| RX dropped                 | 5       | 6                 | 2                  |
+| TX dropped                 | 0       | 0                 | 0                  |
+| TCP RetransSegs (SoC side) | 0       | 0                 | 0                  |
 
-5–6 RX drops over 3.5 M packets (0.0001%) — negligible.
+2–6 RX drops over 3.5 M packets (0.0001%) — negligible.
 
 ### UDP loss at saturation
 
-| Target bandwidth | rtl819x | rtl8196e-eth |
-|-----------------|---------|--------------|
-| 10 Mbps         | 0%      | 0%           |
-| 50 Mbps         | 40%     | 60%          |
-| 100 Mbps        | 41%     | 57%          |
+| Target bandwidth | rtl819x | rtl8196e-eth v1.0 | rtl8196e-eth v1.1 |
+|-----------------|---------|-------------------|--------------------|
+| 10 Mbps         | 0%      | 0%                | 0%                 |
+| 50 Mbps         | 40%     | 60%               | 71%                |
+| 100 Mbps        | 41%     | 57%               | 48%                |
 
 Legacy shows lower UDP loss at high load. The rtl819x private buffer pool
 pre-allocates receive buffers, absorbing bursts more efficiently than the
-standard page-fragment allocator used by rtl8196e-eth. Both are expected
-behaviour for a 400 MHz MIPS SoC with no hardware UDP offload; neither
-driver approaches UDP line rate.
+standard page-fragment allocator used by rtl8196e-eth. UDP loss at
+saturation varies between runs (50 Mbps: 60→71%, 100 Mbps: 57→48%);
+these are within normal variance for a 400 MHz MIPS SoC with no hardware
+UDP offload. Neither driver approaches UDP line rate.
 
 ---
 
@@ -59,7 +69,7 @@ gateway during both TCP tests using `/proc/stat` sampled at 1-second intervals:
 | Test              | Gateway CPU   | Throughput     |
 |-------------------|---------------|----------------|
 | TCP RX (host→gw)  | **100% busy** | ~86–92 Mbps    |
-| TCP TX (gw→host)  | **100% busy** | ~43–47 Mbps    |
+| TCP TX (gw→host)  | **100% busy** | ~43–49 Mbps    |
 
 **Both directions fully saturate the CPU.**  The 2:1 throughput ratio is not
 caused by a hardware asymmetry, a ring management issue, or a protocol
@@ -184,7 +194,7 @@ line-rate.  A hardware bottleneck would suppress RX throughput as well.
 A UDP TX test was run (gateway → host, `iperf -u -b 100M -c <host> -t 10`,
 0% packet loss) to isolate the TCP checksum contribution.
 
-**Result: UDP TX = 25.4 Mbps — lower than TCP TX (44–47 Mbps).**
+**Result: UDP TX = 25.4 Mbps — lower than TCP TX (44–49 Mbps).**
 
 ```
 [  1] 0.00-10.00 sec  30.3 MBytes  25.4 Mbits/sec   0.000 ms  0/21597 (0%)
@@ -229,6 +239,76 @@ The only meaningful software levers are:
 
 The driver already applies all safe software optimisations (no spinlock,
 no BQL, no TX timer, `napi_consume_skb`, `likely`/`unlikely` hints).
+
+---
+
+## PIN_MUX_SEL and UART1 — the EFR32 serial regression (v1.1 → v1.2)
+
+### Symptom
+
+After the v1.1 PIN_MUX_SEL/SEL2 clearing (commit `707effb`),
+`universal-silabs-flasher` could no longer probe the EFR32 Zigbee radio
+through `serialgateway`.  The UART1 peripheral worked internally (THRE
+interrupts fired, DMA ran) but **no electrical signal reached the EFR32
+on the physical TX/RX pins**.
+
+### Diagnosis
+
+Register comparison between the working Tuya firmware and our kernel
+revealed that PIN_MUX_SEL = `0x00000000` on our kernel vs `0x00000042`
+on Tuya.  Direct FIFO inspection confirmed the problem:
+
+```
+PIN_MUX_SEL = 0x00  →  echo ASH reset to /dev/ttyS1  →  LSR DR=0  (no RX data)
+PIN_MUX_SEL = 0x4A  →  echo ASH reset to /dev/ttyS1  →  LSR DR=1  (EFR32 responded)
+```
+
+The UART hardware processed transmissions internally (THRE fired), but
+the pin mux was not routing the UART1 signals to the physical pins.
+
+### Root cause
+
+Two independent gaps:
+
+1. **Bootloader**: unlike the Tuya bootloader, ours does not set
+   PIN_MUX_SEL bits 1 and 6 (UART1 RXD/TXD routing).
+
+2. **Ethernet driver v1.1**: the PIN_MUX_SEL write cleared the
+   bits[4:3] field to `00` (default/GPIO) instead of setting it to `01`
+   (UART1 TXD) as the Realtek vendor BSP does:
+   ```c
+   /* Vendor BSP (linux-2.6.30/boards/rtl8196e/bsp/serial.c) */
+   REG32(0xb8000040) = (REG32(0xb8000040) & ~(0x3<<3)) | (0x01<<3);
+   ```
+
+### Fix (v1.2)
+
+| Driver | Change |
+|--------|--------|
+| `rtl8196e_hw.c` (Ethernet) | Set PIN_MUX_SEL bits[4:3] to `01` (UART1) instead of `00` |
+| `8250_rtl819x.c` (UART1)   | Set PIN_MUX_SEL bits 1, 3, 6 at probe time |
+
+The two fixes are independent of probe ordering: whichever driver loads
+first, the final PIN_MUX_SEL value is `0x4A` (bits 1, 3, 6).
+
+The nRST protection is preserved — that fix relies on PIN_MUX_SEL2
+clearing (unchanged) and on the other PIN_MUX_SEL fields (bits 8–11, 15,
+also unchanged).  Setting bits[4:3] to `01` (UART1) does not drive nRST.
+
+### Verification
+
+After cold boot (no devmem workaround):
+
+```
+$ universal-silabs-flasher --device socket://192.168.1.127:8888 probe
+Detected ApplicationType.EZSP, version '7.5.1.0 build 0' at 115200
+
+$ ./flash_efr32.sh 192.168.1.127
+ncp-uart-hw-7.5.1.gbl  [####################################]  100%
+```
+
+Both probe and flash work in normal mode (CRTSCTS) and flash mode
+(`serialgateway -f`, no hardware flow control).
 
 ---
 

@@ -34,7 +34,10 @@ KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}/${KERNEL_TA
 VANILLA_DIR="linux-${KERNEL_VERSION}"
 
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
-export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+# Add toolchain to PATH only if not already available (avoids GLIBC mismatch in Docker)
+if ! command -v mips-lexra-linux-musl-gcc >/dev/null 2>&1; then
+    export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+fi
 export ARCH=mips
 export CROSS_COMPILE=mips-lexra-linux-musl-
 
@@ -43,7 +46,7 @@ BUILD_ENV="${PROJECT_ROOT}/1-Build-Environment/11-realtek-tools"
 DOCKER_TOOLS="/home/builder/realtek-tools"
 
 CVIMG=""
-for dir in "$BUILD_ENV" "$DOCKER_TOOLS"; do
+for dir in "$DOCKER_TOOLS" "$BUILD_ENV"; do
     [ -x "${dir}/bin/cvimg" ] && CVIMG="${dir}/bin/cvimg" && break
 done
 
@@ -230,7 +233,21 @@ JOBS=$(nproc)
 echo "Building with $JOBS parallel jobs..."
 echo ""
 
-if ! make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE -j$JOBS; then
+# zboot needs xz-utils lzma, not Realtek SDK lzma (incompatible CLI)
+SYS_LZMA=$(command -v lzma 2>/dev/null || true)
+if [ -n "$SYS_LZMA" ] && ! "$SYS_LZMA" --help 2>&1 | grep -q "XZ Utils"; then
+    SYS_LZMA=""
+fi
+if [ -z "$SYS_LZMA" ] && [ -x /usr/bin/lzma ]; then
+    SYS_LZMA="/usr/bin/lzma"
+fi
+if [ -z "$SYS_LZMA" ]; then
+    echo "ERROR: xz-utils not found (provides lzma for kernel compression)"
+    echo "  Install: sudo apt-get install xz-utils"
+    exit 1
+fi
+
+if ! make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE LZMA="$SYS_LZMA" -j$JOBS; then
     echo ""
     echo "=== BUILD FAILED ==="
     exit 1

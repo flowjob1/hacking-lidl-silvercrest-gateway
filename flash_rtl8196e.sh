@@ -17,6 +17,13 @@
 
 set -e
 
+# Check that tftp-hpa client is installed (the script uses its "-c put" syntax)
+if ! command -v tftp >/dev/null 2>&1 || ! tftp --version 2>&1 | grep -q '\-c'; then
+    echo "Error: tftp-hpa client not found (need the -c flag)." >&2
+    echo "Install it with: sudo apt install tftp-hpa" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RTL_DIR="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E"
 TARGET_IP="192.168.1.6"
@@ -37,7 +44,8 @@ done
 # Image locations
 BOOTLOADER_IMG="${RTL_DIR}/31-Bootloader/boot.bin"
 ROOTFS_IMG="${RTL_DIR}/33-Rootfs/rootfs.bin"
-USERDATA_IMG="${RTL_DIR}/34-Userdata/userdata.bin"
+USERDATA_DIR="${RTL_DIR}/34-Userdata"
+USERDATA_IMG="${USERDATA_DIR}/userdata.bin"
 KERNEL_IMG="${RTL_DIR}/32-Kernel/kernel.img"
 
 # Check all images exist
@@ -50,7 +58,38 @@ if [ $MISSING -eq 1 ]; then
     exit 1
 fi
 
-# ARP-based boot mode detection (no root required)
+# --- Network configuration -------------------------------------------------
+
+ETH0_CONF="${USERDATA_DIR}/skeleton/etc/eth0.conf"
+cleanup() { rm -f "$ETH0_CONF"; }
+trap cleanup EXIT
+
+echo "Network configuration for the gateway:"
+echo "  [1] Static IP (recommended)"
+echo "  [2] DHCP"
+read -r -p "Choice [1]: " net_choice
+net_choice="${net_choice:-1}"
+
+if [ "$net_choice" = "1" ]; then
+    read -r -p "IP address [192.168.1.88]: " IPADDR
+    read -r -p "Netmask    [255.255.255.0]: " NETMASK
+    read -r -p "Gateway    [192.168.1.1]:   " GATEWAY
+    IPADDR="${IPADDR:-192.168.1.88}"
+    NETMASK="${NETMASK:-255.255.255.0}"
+    GATEWAY="${GATEWAY:-192.168.1.1}"
+    printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
+    echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
+else
+    rm -f "$ETH0_CONF"
+    echo "→ DHCP"
+fi
+echo ""
+
+echo "Rebuilding userdata..."
+"${USERDATA_DIR}/build_userdata.sh" --jffs2-only
+echo ""
+
+# --- ARP-based boot mode detection (no root required) ----------------------
 echo "Checking if gateway is in boot mode..."
 
 IFACE="$(ip route get "$TARGET_IP" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
