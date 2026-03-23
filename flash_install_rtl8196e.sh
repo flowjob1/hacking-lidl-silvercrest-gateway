@@ -169,6 +169,16 @@ if [ -n "$LINUX_RUNNING" ]; then
     fi
     echo "Firmware type: ${fw_type}"
 
+    # Read firmware version early (used for display and auto-flash detection)
+    if [ "$fw_type" = "custom" ]; then
+        # shellcheck disable=SC2086
+        fw_ver_line=$(ssh $FI_SSH_OPTS "root@${fw_host}" "head -1 /userdata/etc/version" 2>/dev/null || true)
+        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            FW_VERSION="${BASH_REMATCH[1]}"
+            echo "Firmware version: v${FW_VERSION}"
+        fi
+    fi
+
     # --- propose backup (while Linux is still running) -----------------------
     # Skipped in non-interactive mode (-y / CONFIRM=y)
     if [ "${CONFIRM:-}" != "y" ]; then
@@ -184,33 +194,36 @@ if [ -n "$LINUX_RUNNING" ]; then
     if [ "$fw_type" = "custom" ]; then
         # Save user config before reboot (will be injected into userdata)
         # Only user-configurable files — not init scripts or system files
-        echo "Saving gateway config..."
+        USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
+
+        # Backup skeleton before injecting gateway config — restore on exit
+        FI_SKEL_BACKUP=$(mktemp -d)
+        cp -a "$USERDATA_SKEL/etc" "$FI_SKEL_BACKUP/etc"
+        [ -d "$USERDATA_SKEL/ssh" ] && cp -a "$USERDATA_SKEL/ssh" "$FI_SKEL_BACKUP/ssh"
+        [ -d "$USERDATA_SKEL/thread" ] && cp -a "$USERDATA_SKEL/thread" "$FI_SKEL_BACKUP/thread"
+        trap 'rsync -a --delete "$FI_SKEL_BACKUP/etc/" "$USERDATA_SKEL/etc/"
+              rsync -a --delete "$FI_SKEL_BACKUP/ssh/" "$USERDATA_SKEL/ssh/" 2>/dev/null
+              rsync -a --delete "$FI_SKEL_BACKUP/thread/" "$USERDATA_SKEL/thread/" 2>/dev/null
+              rm -rf "$FI_SKEL_BACKUP"' EXIT
+
         SAVE_TAR=$(mktemp)
         SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
         # shellcheck disable=SC2086
         ssh $FI_SSH_OPTS "root@${fw_host}" \
             "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
         if [ -s "$SAVE_TAR" ]; then
-            USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
             tar xf "$SAVE_TAR" -C "$USERDATA_SKEL" 2>/dev/null || true
-            echo "  Preserved user config from gateway"
+            echo "Gateway config saved."
             export NET_MODE="skip"
             export RADIO_MODE="skip"
         fi
         rm -f "$SAVE_TAR"
 
-        # Read firmware version to determine auto-flash capability
-        # shellcheck disable=SC2086
-        fw_ver_line=$(ssh $FI_SSH_OPTS "root@${fw_host}" "head -1 /userdata/etc/version" 2>/dev/null || true)
-        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+) ]]; then
-            FW_VERSION="${BASH_REMATCH[1]}"
-            echo "  Firmware version: v${FW_VERSION}"
-        fi
-
         echo "Sending boothold + reboot..."
         # shellcheck disable=SC2086
-        ssh $FI_SSH_OPTS "root@${fw_host}" \
-            "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+        ssh $FI_SSH_OPTS "root@${fw_host}" "boothold && reboot" 2>/dev/null || true
+        # Close ControlMaster socket — gateway is rebooting
+        ssh -O exit -o ControlPath="$SSH_SOCK" "root@${fw_host}" 2>/dev/null || true
     else
         echo ""
         echo "Tuya firmware detected. Cannot boothold automatically."
@@ -224,8 +237,21 @@ if [ -n "$LINUX_RUNNING" ]; then
     fi
 
     # --- wait for bootloader after boothold + reboot -------------------------
-    # Poll ARP table until BOOT_IP appears AND SSH on LINUX_IP is down
-    # (confirms Linux has shut down and bootloader is running).
+    # Two-phase wait to avoid ARP false positives (Linux responds to ARP for
+    # BOOT_IP via ARP flux while still shutting down).
+
+    # Phase 1: wait for SSH to go down (Linux is shutting down)
+    echo "Waiting for shutdown..."
+    tries=0
+    while [ $tries -lt 15 ]; do
+        if ! timeout 1 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+        tries=$((tries + 1))
+    done
+
+    # Phase 2: wait for bootloader ARP
     echo "Waiting for bootloader at ${BOOT_IP}..."
     tries=0
     while [ $tries -lt 30 ]; do
@@ -234,10 +260,7 @@ if [ -n "$LINUX_RUNNING" ]; then
         sleep 1
         nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
         if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
-            # Confirm Linux is down (SSH must be unreachable on LINUX_IP)
-            if ! timeout 1 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
-                break
-            fi
+            break
         fi
         tries=$((tries + 1))
     done
@@ -328,8 +351,6 @@ fi
 # Called with -q (quiet): only config → lines, errors, and a summary are shown.
 # Run build_fullflash.sh without -q for full verbose output.
 
-echo ""
-echo "Generating disk image... be patient"
 "${SCRIPT_DIR}/build_fullflash.sh" -q
 
 FULLFLASH="${SCRIPT_DIR}/fullflash.bin"
@@ -503,12 +524,33 @@ else
     echo "SSH: root@${LINUX_IP:-${IPADDR:-192.168.1.88}}:22 (no password) in ~30 seconds."
 fi
 
-# --- Optional: flash EFR32 radio firmware -----------------------------------
+# --- Restore skeleton if we injected gateway config -------------------------
+# Skeleton restore is handled by the EXIT trap set above
+
+# --- EFR32 radio firmware info -----------------------------------------------
 if [ "${CONFIRM:-}" != "y" ] && [ -t 0 ]; then
-    echo ""
-    printf "Flash EFR32 radio firmware now? [y/N] "
-    read -r ans
-    if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
-        "${SCRIPT_DIR}/flash_efr32.sh" "${LINUX_IP:-${IPADDR:-192.168.1.88}}"
+    RADIO="${NET_MODE:+${RADIO_MODE}}"
+    # Determine radio mode from radio.conf if not set by env
+    if [ -z "$RADIO" ]; then
+        if [ -f "${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/etc/radio.conf" ] && \
+           grep -q '^MODE=otbr' "${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/etc/radio.conf" 2>/dev/null; then
+            RADIO="thread"
+        else
+            RADIO="zigbee"
+        fi
     fi
+
+    echo ""
+    echo "Make sure the EFR32 radio firmware matches your configuration."
+    echo "Compatible firmware(s):"
+    echo ""
+    if [ "$RADIO" = "thread" ]; then
+        echo "  ot-rcp.gbl             — OpenThread RCP (required for OTBR)"
+    else
+        echo "  ncp-uart-hw-7.5.1.gbl  — Zigbee NCP for serialgateway + Z2M"
+        echo "  rcp-uart-802154.gbl    — Zigbee RCP for cpcd + zigbeed (Docker)"
+        echo "  z3-router-7.5.1.gbl    — Zigbee 3.0 Router (standalone, no coordinator)"
+    fi
+    echo ""
+    echo "Flash with:  ./flash_efr32.sh ${LINUX_IP:-${IPADDR:-192.168.1.88}}"
 fi

@@ -64,30 +64,40 @@ start)
     # Reduce log level from info to warn (0=none 1=crit 2=warn 3=note 4=info)
     sleep 2
     /userdata/usr/bin/ot-ctl log level 2 >/dev/null 2>&1 || true
+    # Note: log level has no REST API equivalent, ot-ctl is used once at startup
 
-    # Status LED: reflect Thread network state on wpan0
-    echo netdev > /sys/class/leds/status/trigger
-    echo wpan0  > /sys/class/leds/status/device_name
-    echo 1      > /sys/class/leds/status/link
-
-    # Persistent dataset sync daemon (background)
-    # Polls active dataset every 30s, syncs to flash only on change.
-    # Traps SIGTERM for a final sync on reboot/shutdown.
+    # Persistent dataset sync + Status LED daemon (background)
+    # Polls the REST API every 30s (avoids ot-ctl broken pipe warnings).
+    # Syncs dataset to flash on change, turns LED on when Thread is formed.
     (
-        trap 'cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null; exit 0' TERM INT
+        trap 'echo 0 > /sys/class/leds/status/brightness
+              cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null; exit 0' TERM INT
+        REST="http://127.0.0.1:${REST_PORT}"
+        LED="/sys/class/leds/status/brightness"
         last_dataset=""
+        last_led=""
+        sleep 5  # let otbr-agent start before first poll
         while true; do
-            sleep 30
-            dataset=$(/userdata/usr/bin/ot-ctl dataset active -x 2>/dev/null)
-            dataset=${dataset%%[[:cntrl:]]*}
-            # Skip empty, "Done"-only, or error responses
-            case "$dataset" in
-                ""|Done*|*Error*) continue ;;
+            # LED: on when Thread state is child, router, or leader
+            state=$(wget -qO- "$REST/node/state" 2>/dev/null)
+            case "$state" in
+                *child*|*router*|*leader*) led=1 ;;
+                *) led=0 ;;
             esac
-            if [ "$dataset" != "$last_dataset" ]; then
-                cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
-                last_dataset="$dataset"
+            if [ "$led" != "$last_led" ]; then
+                echo "$led" > "$LED"
+                last_led="$led"
             fi
+            # Dataset sync
+            dataset=$(wget -qO- "$REST/node/dataset/active" 2>/dev/null)
+            case "$dataset" in
+                "") ;;
+                "$last_dataset") ;;
+                *) cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
+                   last_dataset="$dataset" ;;
+            esac
+            # Poll fast (5s) until Thread is up, then slow (30s)
+            [ "$led" = "1" ] && sleep 30 || sleep 5
         done
     ) &
     echo $! > "$SYNC_PID"
@@ -96,7 +106,7 @@ start)
 stop)
     echo "Stopping otbr-agent..."
     # Reset LED
-    echo none > /sys/class/leds/status/trigger
+    echo 0 > /sys/class/leds/status/brightness
     # Stop sync loop
     [ -f "$SYNC_PID" ] && kill "$(cat "$SYNC_PID")" 2>/dev/null && rm -f "$SYNC_PID"
     killall otbr-agent 2>/dev/null

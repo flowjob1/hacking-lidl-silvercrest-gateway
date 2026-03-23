@@ -4,6 +4,37 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [2.1.1] - 2026-03-22
+
+### flash_efr32.sh
+- **Auto-reinstall USF on patch change**: `flash_efr32.sh` now stores the
+  md5 hash of the applied `silabs-flasher-probe-methods.patch` in the venv.
+  On next launch, if the patch has changed, the venv is removed and USF is
+  reinstalled with the new patch automatically.
+
+---
+
+## [2.1.0] - 2026-03-21
+
+### 24-NCP-UART-HW
+- **Docker Compose stack**: new `docker/` directory with Mosquitto + Zigbee2MQTT
+  (ember adapter) + Home Assistant. Self-contained for NCP users.
+
+### flash_efr32.sh
+- **OTBR support**: stops otbr-agent, cpcd, zigbeed before starting serialgateway
+  in flash mode — no longer requires manual daemon management.
+- **Remove 460800 baud**: gateway UART unreliable at 460800 (see 25-RCP-UART-HW).
+  Removed from baud rate recovery scan and USF probe patch. Saves ~30s on flash.
+
+### silabs-flasher-probe-methods.patch
+- Drop all 460800 entries (EZSP, SPINEL, CPC). Add EZSP@230400, SPINEL@115200,
+  SPINEL@230400.
+
+### 22-Backup-Flash-Restore
+- MEMO-universal-silabs-flasher.md: document 460800 removal rationale.
+
+---
+
 ## [2.0.0] - 2026-03-11
 
 ### 26-OT-RCP

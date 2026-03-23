@@ -3,7 +3,8 @@
 #
 # 1. Presents a menu to select the firmware type (NCP, RCP, OT-RCP, Router)
 # 2. Ensures universal-silabs-flasher is available (installs in venv if needed)
-# 3. SSHes into the gateway to restart serialgateway in flash mode (-f)
+# 3. SSHes into the gateway to stop any radio daemon (otbr-agent, cpcd,
+#    zigbeed, serialgateway) and restart serialgateway in flash mode (-f)
 # 4. Flashes the selected firmware
 # 5. Reboots the gateway (serialgateway restarts normally via init script)
 #
@@ -103,6 +104,19 @@ echo ""
 
 # --- 1. Check / install universal-silabs-flasher ---------------------------
 
+PATCH_FILE="$SCRIPT_DIR/silabs-flasher-probe-methods.patch"
+PATCH_HASH_FILE="${VENV_DIR}/.patch-hash"
+
+# Reinstall if probe-methods patch has changed since last install
+if [ -x "${VENV_DIR}/bin/universal-silabs-flasher" ] && [ -f "$PATCH_FILE" ]; then
+    current_hash=$(md5sum "$PATCH_FILE" 2>/dev/null | awk '{print $1}')
+    applied_hash=$(cat "$PATCH_HASH_FILE" 2>/dev/null || true)
+    if [ "$current_hash" != "$applied_hash" ]; then
+        echo "Probe methods patch changed — reinstalling USF..."
+        rm -rf "$VENV_DIR"
+    fi
+fi
+
 if [ -x "${VENV_DIR}/bin/universal-silabs-flasher" ]; then
     FLASHER="${VENV_DIR}/bin/universal-silabs-flasher"
     echo "universal-silabs-flasher: venv (${VENV_DIR})"
@@ -117,8 +131,10 @@ else
     # Patch USF to probe Spinel/EZSP at 115200/230400 (upstream only probes
     # Spinel at 460800 and EZSP at 115200/460800 — misses our common bauds)
     USF_CONST=$(find "$VENV_DIR" -path '*/universal_silabs_flasher/const.py' -print -quit)
-    if [ -n "$USF_CONST" ] && patch --dry-run -f "$USF_CONST" "$SCRIPT_DIR/silabs-flasher-probe-methods.patch" >/dev/null 2>&1; then
-        patch -f "$USF_CONST" "$SCRIPT_DIR/silabs-flasher-probe-methods.patch" >/dev/null
+    if [ -n "$USF_CONST" ] && [ -f "$PATCH_FILE" ] && \
+       patch --dry-run -f "$USF_CONST" "$PATCH_FILE" >/dev/null 2>&1; then
+        patch -f "$USF_CONST" "$PATCH_FILE" >/dev/null
+        md5sum "$PATCH_FILE" | awk '{print $1}' > "$PATCH_HASH_FILE"
         echo "Installed (patched probe methods)."
     else
         echo "Installed."
@@ -130,9 +146,18 @@ echo ""
 # serialgateway -f disables hardware RTS/CTS.  The Gecko Bootloader uses
 # XON/XOFF (software flow control) for Xmodem transfers.
 
-echo "Connecting to ${GW_IP} — restarting serialgateway in flash mode..."
+echo "Connecting to ${GW_IP} — preparing serial port for flashing..."
 for i in $(seq 1 "$SSH_RETRIES"); do
-    if $SSH "killall serialgateway 2>/dev/null || true; serialgateway -f"; then
+    if $SSH "
+        # Stop any daemon holding the serial port
+        killall otbr-agent 2>/dev/null || true
+        killall cpcd 2>/dev/null || true
+        killall zigbeed 2>/dev/null || true
+        killall serialgateway 2>/dev/null || true
+        sleep 1
+        # Start serialgateway in flash mode (no HW flow control)
+        serialgateway -f
+    "; then
         break
     fi
     if [ "$i" -eq "$SSH_RETRIES" ]; then
@@ -212,7 +237,7 @@ else
         echo "Standard flash failed. Scanning for firmware at other baud rates..."
 
         RECOVERED=false
-        for BAUD in 230400 460800; do
+        for BAUD in 230400; do
             echo "  Trying ${BAUD} baud..."
             $SSH "killall serialgateway 2>/dev/null || true; serialgateway -b ${BAUD} -f"
             sleep 1
@@ -243,7 +268,7 @@ else
             echo ""
             echo "Flash failed."
             echo ""
-            echo "Could not detect firmware at any known baud rate (115200, 230400, 460800)."
+            echo "Could not detect firmware at any known baud rate (115200, 230400)."
             echo "You may need a J-Link/SWD debugger to recover."
             $SSH "reboot" 2>/dev/null || true
             exit 1
