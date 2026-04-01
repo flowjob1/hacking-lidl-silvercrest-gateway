@@ -154,6 +154,8 @@ for i in $(seq 1 "$SSH_RETRIES"); do
         killall cpcd 2>/dev/null || true
         killall zigbeed 2>/dev/null || true
         killall serialgateway 2>/dev/null || true
+        # Stop LED PWM timer (interferes with UART during Xmodem transfer)
+        echo 0 > /sys/class/leds/status/brightness 2>/dev/null || true
         sleep 1
         # Start serialgateway in flash mode (no HW flow control)
         serialgateway -f

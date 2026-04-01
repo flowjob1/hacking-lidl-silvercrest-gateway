@@ -49,6 +49,9 @@ start)
 
     # Enable IPv6 forwarding (required for border routing)
     echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+    # Accept Router Advertisements even with forwarding enabled (default drops
+    # to 0 when forwarding=1), so the gateway can acquire a GUA via SLAAC
+    echo 2 > /proc/sys/net/ipv6/conf/eth0/accept_ra
 
     $OTBR_BIN \
         -d 4 \
@@ -85,7 +88,16 @@ start)
                 *) led=0 ;;
             esac
             if [ "$led" != "$last_led" ]; then
-                echo "$led" > "$LED"
+                if [ "$led" = "1" ]; then
+                    # Match STATUS LED brightness to LAN LED mode
+                    mode=$(cat /sys/class/net/eth0/led_mode 2>/dev/null)
+                    case "$mode" in
+                        dim*) echo 60 > "$LED" ;;
+                        *)    echo 255 > "$LED" ;;
+                    esac
+                else
+                    echo 0 > "$LED"
+                fi
                 last_led="$led"
             fi
             # Dataset sync — only write to flash when dataset actually changes
