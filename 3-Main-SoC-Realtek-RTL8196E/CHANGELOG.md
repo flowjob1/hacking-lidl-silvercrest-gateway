@@ -6,6 +6,30 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.1.5] - 2026-04-04
+
+### OTBR REST API — PascalCase kept
+
+The PascalCase REST API patch is **kept**. `python-otbr-api` 2.9.0
+(HA 2026.4) accepts camelCase in GET responses but still sends PascalCase
+in PUT requests — upstream `otbr-agent` (camelCase) rejects them.
+PascalCase `otbr-agent` works with all HA versions.
+See [python-otbr-api#238](https://github.com/home-assistant-libs/python-otbr-api/issues/238).
+
+### New features
+- **Dropbear SCP & SSH client**: `scp` and `dbclient` (SSH client) added to
+  the dropbear multi-call binary. Enables `scp` file transfers to/from the
+  gateway and outbound SSH connections via `dbclient`. Progress bar included
+  (`SCPPROGRESS`). Binary size: 473 KB → 555 KB (+82 KB).
+
+### Fixes
+- **rootfs.bin always rebuilt**: `build_fullflash.sh` and `flash_rootfs.sh`
+  now always rebuild `rootfs.bin` from the skeleton, like `userdata.bin`.
+  Prevents stale images from being flashed after an upgrade.
+- **version/motd bumped** to v2.1.5.
+
+---
+
 ## [2.1.4] - 2026-04-02
 
 ### New features

@@ -4,6 +4,16 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [2.1.5] - 2026-04-04
+
+### 26-OT-RCP (OTBR on gateway)
+- **HA REST API: PascalCase kept**. `python-otbr-api` 2.9.0 (HA 2026.4)
+  still sends PascalCase in PUT requests — upstream camelCase `otbr-agent`
+  rejects them. PascalCase `otbr-agent` works with all HA versions.
+  See [python-otbr-api#238](https://github.com/home-assistant-libs/python-otbr-api/issues/238).
+
+---
+
 ## [2.1.3] - 2026-04-01
 
 ### 26-OT-RCP (OTBR on gateway)

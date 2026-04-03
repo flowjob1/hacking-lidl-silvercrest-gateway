@@ -1,0 +1,184 @@
+site_name: Hacking the Lidl Silvercrest Gateway
+site_description: Open firmware for the Lidl Silvercrest Zigbee Gateway — Zigbee coordinator, Thread Border Router, or router.
+site_url: https://jnilo1.github.io/hacking-lidl-silvercrest-gateway/
+repo_url: https://github.com/jnilo1/hacking-lidl-silvercrest-gateway
+repo_name: jnilo1/hacking-lidl-silvercrest-gateway
+edit_uri: edit/main/
+
+# Single source: .md files stay at their current location in the repo.
+# The mkdocs-same-dir plugin allows docs_dir to be the repo root.
+docs_dir: .
+site_dir: site
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes        # README.md becomes the section landing page
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - content.action.edit
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - same-dir         # required for docs_dir: .
+  - awesome-pages    # auto-nav from directory tree (used more in phase 2+)
+  - section-index    # README.md → section index page
+
+extra_css:
+  - docs-assets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      # Use a github-compatible slugifier so anchor links written for
+      # github.com (e.g. #use-case-1-zoh--zigbee-zigbee-on-host) also
+      # resolve on the MkDocs site.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+# Phase 1: explicit, minimal nav. Phase 2 will rely on awesome-pages
+# to auto-discover sub-sections as exclusions are lifted.
+nav:
+  - Home: README.md
+  - Hardware: 0-Hardware/README.md
+  - Build environment: 1-Build-Environment/README.md
+  - Zigbee Radio (EFR32):
+    - 2-Zigbee-Radio-Silabs-EFR32/README.md
+    - EZSP Reference: 2-Zigbee-Radio-Silabs-EFR32/20-EZSP-Reference/README.md
+    - Simplicity Studio: 2-Zigbee-Radio-Silabs-EFR32/21-Simplicity-Studio/README.md
+    - Backup, Flash & Restore: 2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/README.md
+    - Bootloader (UART/Xmodem):
+      - 2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/README.md
+      - Firmware: 2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/firmware/README.md
+    - NCP-UART-HW (EmberZNet): 2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/README.md
+    - RCP-UART-HW (Multi-PAN):
+      - 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/README.md
+      - EmberZNet 8.x guide: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/EMBERZNET-8.x-GUIDE.md
+      - cpcd: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/cpcd/README.md
+      - Docker: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/README.md
+      - RCP stack: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/rcp-stack/README.md
+      - zigbeed 7.5.1: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/zigbeed-7.5.1/README.md
+      - zigbeed 8.2.2: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/zigbeed-8.2.2/README.md
+    - OT-RCP (OpenThread):
+      - 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/README.md
+      - Thread & Matter primer: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/THREAD-MATTER-PRIMER.md
+      - Docker: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker/README.md
+    - Router: 2-Zigbee-Radio-Silabs-EFR32/27-Router/README.md
+  - Main SoC (RTL8196E):
+    - 3-Main-SoC-Realtek-RTL8196E/README.md
+    - Backup & Restore: 3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/README.md
+    - Bootloader:
+      - 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/README.md
+      - Commands: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/COMMANDS.md
+      - Reboot to bootloader: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/REBOOT_TO_BOOTLOADER.md
+      - Testing guide: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/TESTING.md
+    - Kernel: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/README.md
+    - Rootfs: 3-Main-SoC-Realtek-RTL8196E/33-Rootfs/README.md
+    - Userdata:
+      - 3-Main-SoC-Realtek-RTL8196E/34-Userdata/README.md
+      - OpenThread Border Router: 3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/README.md
+    - Migration: 3-Main-SoC-Realtek-RTL8196E/35-Migration/README.md
+
+# Exclusions: keep the build small and clean in phase 1.
+# Sub-sections (2x-*, 3x-*) are excluded for now and will be enabled
+# one by one in phase 2 as their links are validated.
+exclude_docs: |
+  CLAUDE.md
+  .claude/
+  .venv-docs/
+  site/
+  node_modules/
+  packages/
+  x-tools/
+  silabs-tools/
+  silabs-flasher/
+  SimplicityStudio/
+  **/build/
+  **/Output/
+  **/out/
+  **/linux-*/
+  **/busybox-*/
+  **/dropbear*/
+  **/DROPBEAR_*/
+  **/openthread*/
+  **/ncurses*/
+  **/nano-*/
+  1-Build-Environment/11-realtek-tools/
+  # Per-section build artifacts and source dirs (sub-section READMEs are kept)
+  2-Zigbee-Radio-Silabs-EFR32/*/build/
+  2-Zigbee-Radio-Silabs-EFR32/*/patches/*.patch
+  2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/docker/z2m/
+  2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/z2m/
+  2-Zigbee-Radio-Silabs-EFR32/CHANGELOG.md
+  # Dev note — internal technical memo
+  2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/MEMO-universal-silabs-flasher.md
+  # Dev notes — patches/ READMEs document the build process for contributors
+  2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/patches/README.md
+  2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/patches/README.md
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/linux-*/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/files/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/scripts/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/test_results_*/
+  # Gitignored dev notes — not in git, also excluded from the site
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/COMPRESSION.md
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/IRAM-DMEM-MIPS16.md
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/OPUS_REVIEW_PROMPT.md
+  # Dev notes — Ethernet driver perf analysis, contributor-only
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/PERF-ANALYSIS.md
+  3-Main-SoC-Realtek-RTL8196E/33-Rootfs/skeleton/
+  3-Main-SoC-Realtek-RTL8196E/33-Rootfs/busybox/
+  3-Main-SoC-Realtek-RTL8196E/33-Rootfs/dropbear/
+  3-Main-SoC-Realtek-RTL8196E/33-Rootfs/scripts/
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/serialgateway/
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/build/
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/src/
+  # Vendored ot-br-posix git clone (the doubled-path inner copy)
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/ot-br-posix/
+  3-Main-SoC-Realtek-RTL8196E/CHANGELOG.md
+  3-Main-SoC-Realtek-RTL8196E/3-Main-SoC-Realtek-RTL8196E/
+  backups/
+
+  # Developer notes — readable on github.com but excluded from the site
+  3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/MEMO_BOOTLOADER.md
+  3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/BOOTLOADER_TOOLCHAIN_NOTES.md
+  3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/RESET_VECTOR_AUDIT.md
