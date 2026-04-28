@@ -70,10 +70,10 @@ resolve_iface() {
         echo "Error: cannot determine outgoing interface to ${ip}." >&2
         exit 1
     fi
-    if ip route get "$ip" 2>/dev/null | grep -qE '\svia\s'; then
-        echo "Error: ${ip} is reached via a gateway (routed). Must be same L2 segment." >&2
-        exit 1
-    fi
+    #if ip route get "$ip" 2>/dev/null | grep -qE '\svia\s'; then
+    #    echo "Error: ${ip} is reached via a gateway (routed). Must be same L2 segment." >&2
+    #    exit 1
+    #fi
 }
 
 # --- detection helpers -------------------------------------------------------

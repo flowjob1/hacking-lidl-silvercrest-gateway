@@ -30,7 +30,7 @@ if ! command -v nc >/dev/null 2>&1; then
     exit 1
 fi
 
-TARGET_IP="${1:-192.168.1.6}"
+TARGET_IP="${1:-192.168.187.22}"
 IMAGE="${2:-${SCRIPT_DIR}/boot.bin}"
 
 TRIES="${TRIES:-10}"
@@ -104,10 +104,10 @@ if [ "${BOOTLOADER_CONFIRMED:-}" != "1" ]; then
         exit 1
     fi
 
-    if ip route get "$TARGET_IP" 2>/dev/null | grep -qE '\svia\s'; then
-        echo "Error: ${TARGET_IP} is reached via a gateway (routed). Must be on the same L2 segment." >&2
-        exit 1
-    fi
+    #if ip route get "$TARGET_IP" 2>/dev/null | grep -qE '\svia\s'; then
+    #    echo "Error: ${TARGET_IP} is reached via a gateway (routed). Must be on the same L2 segment." >&2
+    #    exit 1
+    #fi
 
     if ! check_bootloader_reachable "$TARGET_IP" "$IFACE"; then
         echo "Error: ${TARGET_IP} unreachable — check cable and that device is in download mode." >&2

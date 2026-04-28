@@ -93,3 +93,13 @@ packages/
 # MkDocs documentation site
 site/
 .venv-docs/
+/lilgatewayenv/
+/.idea/.gitignore
+/.idea/copilot.data.migration.agent.xml
+/.idea/copilot.data.migration.ask.xml
+/.idea/copilot.data.migration.ask2agent.xml
+/.idea/copilot.data.migration.edit.xml
+/.idea/hacking-lidl-silvercrest-gateway.iml
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/vcs.xml

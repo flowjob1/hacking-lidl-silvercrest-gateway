@@ -140,236 +140,236 @@ echo "Checking for bootloader at ${BOOT_IP}..."
 
 IFACE="$(ip route get "$BOOT_IP" 2>/dev/null \
     | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
-if [ -z "${IFACE:-}" ]; then
-    echo "Error: cannot determine outgoing interface to ${BOOT_IP}." >&2
-    exit 1
-fi
+# if [ -z "${IFACE:-}" ]; then
+    # echo "Error: cannot determine outgoing interface to ${BOOT_IP}." >&2
+    # exit 1
+# fi
 
 # Detect gateway state based on whether LINUX_IP was provided
-LINUX_RUNNING=""
-if [ -n "$LINUX_IP" ]; then
-    echo "Probing SSH on ${LINUX_IP}..."
-    if timeout "$SSH_TIMEOUT" bash -c "echo >/dev/tcp/$LINUX_IP/22" 2>/dev/null; then
-        LINUX_RUNNING="${LINUX_IP}:22"
-    elif timeout "$SSH_TIMEOUT" bash -c "echo >/dev/tcp/$LINUX_IP/2333" 2>/dev/null; then
-        LINUX_RUNNING="${LINUX_IP}:2333"
-    else
-        echo "Error: cannot reach gateway at ${LINUX_IP} (no SSH on port 22 or 2333)." >&2
-        echo "Check the Ethernet cable, or if the gateway is already in bootloader mode" >&2
-        echo "re-run without argument:  $0" >&2
-        exit 1
-    fi
-fi
+# LINUX_RUNNING=""
+# if [ -n "$LINUX_IP" ]; then
+    # echo "Probing SSH on ${LINUX_IP}..."
+    # if timeout "$SSH_TIMEOUT" bash -c "echo >/dev/tcp/$LINUX_IP/22" 2>/dev/null; then
+        # LINUX_RUNNING="${LINUX_IP}:22"
+    # elif timeout "$SSH_TIMEOUT" bash -c "echo >/dev/tcp/$LINUX_IP/2333" 2>/dev/null; then
+        # LINUX_RUNNING="${LINUX_IP}:2333"
+    # else
+        # echo "Error: cannot reach gateway at ${LINUX_IP} (no SSH on port 22 or 2333)." >&2
+        # echo "Check the Ethernet cable, or if the gateway is already in bootloader mode" >&2
+        # echo "re-run without argument:  $0" >&2
+        # exit 1
+    # fi
+# fi
 
-if [ -n "$LINUX_RUNNING" ]; then
-    fw_host="${LINUX_RUNNING%%:*}"
-    fw_port="${LINUX_RUNNING##*:}"
-    echo "Linux detected at ${fw_host}:${fw_port}."
+# if [ -n "$LINUX_RUNNING" ]; then
+    # fw_host="${LINUX_RUNNING%%:*}"
+    # fw_port="${LINUX_RUNNING##*:}"
+    # echo "Linux detected at ${fw_host}:${fw_port}."
 
-    if [ "$fw_port" = "2333" ]; then
-        # Port 2333 is exclusively Tuya/Lidl — no SSH needed
-        fw_type="tuya"
-    else
-        # Port 22 — could be custom or Tuya; SSH in to check
-        SSH_SOCK="/tmp/flash_install_ssh_$$"
-        FI_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o HostKeyAlgorithms=+ssh-rsa -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=10 -p $fw_port"
+    # if [ "$fw_port" = "2333" ]; then
+        # # Port 2333 is exclusively Tuya/Lidl — no SSH needed
+        # fw_type="tuya"
+    # else
+        # # Port 22 — could be custom or Tuya; SSH in to check
+        # SSH_SOCK="/tmp/flash_install_ssh_$$"
+        # FI_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o HostKeyAlgorithms=+ssh-rsa -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=10 -p $fw_port"
 
-        # Verify SSH access before proceeding
-        # shellcheck disable=SC2086
-        if ! ssh $FI_SSH_OPTS "root@${fw_host}" "true" 2>/dev/null; then
-            echo "Error: SSH authentication failed." >&2
-            exit 1
-        fi
+        # # Verify SSH access before proceeding
+        # # shellcheck disable=SC2086
+        # if ! ssh $FI_SSH_OPTS "root@${fw_host}" "true" 2>/dev/null; then
+            # echo "Error: SSH authentication failed." >&2
+            # exit 1
+        # fi
 
-        # Detect firmware type: devmem present = custom firmware (can boothold)
-        # devmem absent = Tuya firmware (even if SSH port was changed to 22)
-        # shellcheck disable=SC2086
-        if ssh $FI_SSH_OPTS "root@${fw_host}" "command -v devmem" >/dev/null 2>&1; then
-            fw_type="custom"
-        else
-            fw_type="tuya"
-        fi
-    fi
-    echo "Firmware type: ${fw_type}"
+        # # Detect firmware type: devmem present = custom firmware (can boothold)
+        # # devmem absent = Tuya firmware (even if SSH port was changed to 22)
+        # # shellcheck disable=SC2086
+        # if ssh $FI_SSH_OPTS "root@${fw_host}" "command -v devmem" >/dev/null 2>&1; then
+            # fw_type="custom"
+        # else
+            # fw_type="tuya"
+        # fi
+    # fi
+    # echo "Firmware type: ${fw_type}"
 
-    # Read firmware version early (used for display and auto-flash detection)
-    if [ "$fw_type" = "custom" ]; then
-        # shellcheck disable=SC2086
-        fw_ver_line=$(ssh $FI_SSH_OPTS "root@${fw_host}" "head -1 /userdata/etc/version" 2>/dev/null || true)
-        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-            FW_VERSION="${BASH_REMATCH[1]}"
-            echo "Firmware version: v${FW_VERSION}"
-        fi
-    fi
+    # # Read firmware version early (used for display and auto-flash detection)
+    # if [ "$fw_type" = "custom" ]; then
+        # # shellcheck disable=SC2086
+        # fw_ver_line=$(ssh $FI_SSH_OPTS "root@${fw_host}" "head -1 /userdata/etc/version" 2>/dev/null || true)
+        # if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            # FW_VERSION="${BASH_REMATCH[1]}"
+            # echo "Firmware version: v${FW_VERSION}"
+        # fi
+    # fi
 
-    # --- propose backup (while Linux is still running) -----------------------
-    # Skipped in non-interactive mode (-y / CONFIRM=y)
-    if [ "${CONFIRM:-}" != "y" ]; then
-        echo ""
-        echo "It is recommended to back up the flash before installing."
-        read -r -p "Run backup_gateway.sh now? [y/N] " do_backup
-        if [[ "$do_backup" =~ ^[yY]$ ]]; then
-            "${SCRIPT_DIR}/backup_gateway.sh" --linux-ip "$fw_host" --boot-ip "$BOOT_IP"
-            echo ""
-        fi
-    fi
+    # # --- propose backup (while Linux is still running) -----------------------
+    # # Skipped in non-interactive mode (-y / CONFIRM=y)
+    # if [ "${CONFIRM:-}" != "y" ]; then
+        # echo ""
+        # echo "It is recommended to back up the flash before installing."
+        # read -r -p "Run backup_gateway.sh now? [y/N] " do_backup
+        # if [[ "$do_backup" =~ ^[yY]$ ]]; then
+            # "${SCRIPT_DIR}/backup_gateway.sh" --linux-ip "$fw_host" --boot-ip "$BOOT_IP"
+            # echo ""
+        # fi
+    # fi
 
-    if [ "$fw_type" = "custom" ]; then
-        # Save user config before reboot (will be injected into userdata)
-        # Only user-configurable files — not init scripts or system files
-        # Work on a temporary copy of the skeleton — never modify the original
-        USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
-        SKEL_WORK=$(mktemp -d)
-        cp -a "$USERDATA_SKEL/." "$SKEL_WORK/"
-        trap 'rm -rf "$SKEL_WORK"' EXIT
-        export SKELETON_DIR="$SKEL_WORK"
+    # if [ "$fw_type" = "custom" ]; then
+        # # Save user config before reboot (will be injected into userdata)
+        # # Only user-configurable files — not init scripts or system files
+        # # Work on a temporary copy of the skeleton — never modify the original
+        # USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
+        # SKEL_WORK=$(mktemp -d)
+        # cp -a "$USERDATA_SKEL/." "$SKEL_WORK/"
+        # trap 'rm -rf "$SKEL_WORK"' EXIT
+        # export SKELETON_DIR="$SKEL_WORK"
 
-        SAVE_TAR=$(mktemp)
-        SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/leds.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
-        # shellcheck disable=SC2086
-        ssh $FI_SSH_OPTS "root@${fw_host}" \
-            "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
-        if [ -s "$SAVE_TAR" ]; then
-            tar xf "$SAVE_TAR" -C "$SKEL_WORK" 2>/dev/null || true
-            echo "Gateway config saved."
-            export NET_MODE="skip"
-            export RADIO_MODE="skip"
-        fi
-        rm -f "$SAVE_TAR"
+        # SAVE_TAR=$(mktemp)
+        # SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/leds.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
+        # # shellcheck disable=SC2086
+        # ssh $FI_SSH_OPTS "root@${fw_host}" \
+            # "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
+        # if [ -s "$SAVE_TAR" ]; then
+            # tar xf "$SAVE_TAR" -C "$SKEL_WORK" 2>/dev/null || true
+            # echo "Gateway config saved."
+            # export NET_MODE="skip"
+            # export RADIO_MODE="skip"
+        # fi
+        # rm -f "$SAVE_TAR"
 
-        echo "Sending boothold + reboot..."
-        # shellcheck disable=SC2086
-        ssh $FI_SSH_OPTS "root@${fw_host}" "boothold && reboot" 2>/dev/null || true
-        # Close ControlMaster socket — gateway is rebooting
-        ssh -O exit -o ControlPath="$SSH_SOCK" "root@${fw_host}" 2>/dev/null || true
-    else
-        echo ""
-        echo "Tuya firmware detected. Cannot boothold automatically."
-        echo "To enter bootloader mode:"
-        echo "  - Connect serial console (3.3V UART, 38400 8N1, line wrap ON)"
-        echo "  - Power cycle the gateway"
-        echo "  - Press ESC repeatedly during boot to get the <RealTek> prompt"
-        echo "  - Then re-run:  $0"
-        echo ""
-        exit 1
-    fi
+        # echo "Sending boothold + reboot..."
+        # # shellcheck disable=SC2086
+        # ssh $FI_SSH_OPTS "root@${fw_host}" "boothold && reboot" 2>/dev/null || true
+        # # Close ControlMaster socket — gateway is rebooting
+        # ssh -O exit -o ControlPath="$SSH_SOCK" "root@${fw_host}" 2>/dev/null || true
+    # else
+        # echo ""
+        # echo "Tuya firmware detected. Cannot boothold automatically."
+        # echo "To enter bootloader mode:"
+        # echo "  - Connect serial console (3.3V UART, 38400 8N1, line wrap ON)"
+        # echo "  - Power cycle the gateway"
+        # echo "  - Press ESC repeatedly during boot to get the <RealTek> prompt"
+        # echo "  - Then re-run:  $0"
+        # echo ""
+        # exit 1
+    # fi
 
     # --- wait for bootloader after boothold + reboot -------------------------
     # Two-phase wait to avoid ARP false positives (Linux responds to ARP for
     # BOOT_IP via ARP flux while still shutting down).
 
     # Phase 1: wait for SSH to go down (Linux is shutting down)
-    echo "Waiting for shutdown..."
-    tries=0
-    while [ $tries -lt 15 ]; do
-        if ! timeout 1 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-        tries=$((tries + 1))
-    done
+    # echo "Waiting for shutdown..."
+    # tries=0
+    # while [ $tries -lt 15 ]; do
+        # if ! timeout 1 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
+            # break
+        # fi
+        # sleep 1
+        # tries=$((tries + 1))
+    # done
 
-    # Phase 2: wait for bootloader ARP
-    echo "Waiting for bootloader at ${BOOT_IP}..."
-    tries=0
-    while [ $tries -lt 30 ]; do
-        ip neigh del "$BOOT_IP" dev "$IFACE" 2>/dev/null || true
-        bash -c "echo -n X >/dev/udp/$BOOT_IP/69" 2>/dev/null || true
-        sleep 1
-        nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
-        if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
-            break
-        fi
-        tries=$((tries + 1))
-    done
+    # # Phase 2: wait for bootloader ARP
+    # echo "Waiting for bootloader at ${BOOT_IP}..."
+    # tries=0
+    # while [ $tries -lt 30 ]; do
+        # ip neigh del "$BOOT_IP" dev "$IFACE" 2>/dev/null || true
+        # bash -c "echo -n X >/dev/udp/$BOOT_IP/69" 2>/dev/null || true
+        # sleep 1
+        # nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
+        # if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
+            # break
+        # fi
+        # tries=$((tries + 1))
+    # done
 
-    if [ $tries -ge 30 ]; then
-        echo "Error: bootloader not detected after boothold." >&2
-        exit 1
-    fi
-else
-    # No LINUX_IP given — check if bootloader is reachable via ARP
-    ip neigh del "$BOOT_IP" dev "$IFACE" 2>/dev/null || true
-    bash -c "echo -n X >/dev/udp/$BOOT_IP/69" 2>/dev/null || true
-    sleep 0.3
+    # if [ $tries -ge 30 ]; then
+        # echo "Error: bootloader not detected after boothold." >&2
+        # exit 1
+    # fi
+# else
+    # # No LINUX_IP given — check if bootloader is reachable via ARP
+    # ip neigh del "$BOOT_IP" dev "$IFACE" 2>/dev/null || true
+    # bash -c "echo -n X >/dev/udp/$BOOT_IP/69" 2>/dev/null || true
+    # sleep 0.3
 
-    nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
-    if ! echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
-        echo "Gateway not detected at ${BOOT_IP}."
-        echo ""
-        echo "For first-time flash:"
-        echo "  - Connect serial console (3.3V UART, 38400 8N1, line wrap ON)"
-        echo "  - Power cycle the gateway"
-        echo "  - Press ESC repeatedly during boot to get the <RealTek> prompt"
-        echo "  - Then re-run:  $0"
-        echo ""
-        echo "For upgrade (with config save):"
-        echo "  - Run:  $0 <GATEWAY_IP>   (e.g. $0 192.168.1.88)"
-        echo ""
-        exit 1
-    fi
+    # nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
+    # if ! echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
+        # echo "Gateway not detected at ${BOOT_IP}."
+        # echo ""
+        # echo "For first-time flash:"
+        # echo "  - Connect serial console (3.3V UART, 38400 8N1, line wrap ON)"
+        # echo "  - Power cycle the gateway"
+        # echo "  - Press ESC repeatedly during boot to get the <RealTek> prompt"
+        # echo "  - Then re-run:  $0"
+        # echo ""
+        # echo "For upgrade (with config save):"
+        # echo "  - Run:  $0 <GATEWAY_IP>   (e.g. $0 192.168.1.88)"
+        # echo ""
+        # exit 1
+    # fi
 
-    # ARP resolved — but is it really bootloader? Probe TFTP to confirm.
-    # Use PUT (not GET): bootloader ACKs a WRQ immediately, but silently drops
-    # RRQ (prints error on serial only, no UDP response → tftp-hpa hangs).
-    # timeout returns 124 when no TFTP server responds; 0 when bootloader ACKs.
-    probe_file=$(mktemp)
-    echo -n X > "$probe_file"
-    probe_rc=0
-    timeout 3 tftp -m binary "$BOOT_IP" -c put "$probe_file" >/dev/null 2>&1 || probe_rc=$?
-    rm -f "$probe_file"
-    if [ $probe_rc -eq 124 ]; then
-        echo "Device at ${BOOT_IP} is not in bootloader mode (no TFTP server)."
-        echo "If the gateway is running Linux, run:  $0 <GATEWAY_IP>"
-        exit 1
-    fi
+    # # ARP resolved — but is it really bootloader? Probe TFTP to confirm.
+    # # Use PUT (not GET): bootloader ACKs a WRQ immediately, but silently drops
+    # # RRQ (prints error on serial only, no UDP response → tftp-hpa hangs).
+    # # timeout returns 124 when no TFTP server responds; 0 when bootloader ACKs.
+    # probe_file=$(mktemp)
+    # echo -n X > "$probe_file"
+    # probe_rc=0
+    # timeout 3 tftp -m binary "$BOOT_IP" -c put "$probe_file" >/dev/null 2>&1 || probe_rc=$?
+    # rm -f "$probe_file"
+    # if [ $probe_rc -eq 124 ]; then
+        # echo "Device at ${BOOT_IP} is not in bootloader mode (no TFTP server)."
+        # echo "If the gateway is running Linux, run:  $0 <GATEWAY_IP>"
+        # exit 1
+    # fi
 
-    # ARP resolved + TFTP responding = bootloader.
-    echo ""
-    echo "Bootloader detected. No config files/variables will be imported"
-    echo "You will be prompted for network and radio settings."
-    if [ "${CONFIRM:-}" != "y" ]; then
-        read -r -p "Proceed? [y/N] " r
-        if [[ ! "$r" =~ ^[yY]$ ]]; then
-            echo "Aborted."
-            exit 0
-        fi
-    fi
-fi
+    # # ARP resolved + TFTP responding = bootloader.
+    # echo ""
+    # echo "Bootloader detected. No config files/variables will be imported"
+    # echo "You will be prompted for network and radio settings."
+    # if [ "${CONFIRM:-}" != "y" ]; then
+        # read -r -p "Proceed? [y/N] " r
+        # if [[ ! "$r" =~ ^[yY]$ ]]; then
+            # echo "Aborted."
+            # exit 0
+        # fi
+    # fi
+# fi
 
 # Detect bootloader type:
 #   - Custom firmware always has V2.3 bootloader — no need to ping.
 #   - First flash (no LINUX_IP): probe with ping (V2 responds, older don't).
-if [ "${fw_type:-}" = "custom" ]; then
-    BOOTLOADER_TYPE="v2"
-else
+# if [ "${fw_type:-}" = "custom" ]; then
+    # BOOTLOADER_TYPE="v2"
+# else
     BOOTLOADER_TYPE="old"
-    if ping -c 1 -W 2 "$BOOT_IP" >/dev/null 2>&1; then
-        BOOTLOADER_TYPE="v2"
-    fi
-fi
+    # if ping -c 1 -W 2 "$BOOT_IP" >/dev/null 2>&1; then
+        # BOOTLOADER_TYPE="v2"
+    # fi
+# fi
 
 echo "Bootloader detected at ${BOOT_IP} (type: ${BOOTLOADER_TYPE})."
 
 # If we reached bootloader without going through Linux (no backup opportunity),
 # warn the user.
-if [ -z "$LINUX_RUNNING" ] && [ "${CONFIRM:-}" != "y" ]; then
-    echo ""
-    echo "WARNING: No backup was made. To back up first, boot the gateway"
-    echo "into Linux and run:  ./backup_gateway.sh"
-    echo ""
-    read -r -p "Continue without backup? [y/N] " do_continue
-    if [[ ! "$do_continue" =~ ^[yY]$ ]]; then
-        echo "Aborted."
-        exit 0
-    fi
-fi
+# if [ -z "$LINUX_RUNNING" ] && [ "${CONFIRM:-}" != "y" ]; then
+    # echo ""
+    # echo "WARNING: No backup was made. To back up first, boot the gateway"
+    # echo "into Linux and run:  ./backup_gateway.sh"
+    # echo ""
+    # read -r -p "Continue without backup? [y/N] " do_continue
+    # if [[ ! "$do_continue" =~ ^[yY]$ ]]; then
+        # echo "Aborted."
+        # exit 0
+    # fi
+# fi
 
 # --- build fullflash.bin -----------------------------------------------------
 # Called with -q (quiet): only config → lines, errors, and a summary are shown.
 # Run build_fullflash.sh without -q for full verbose output.
 
-"${SCRIPT_DIR}/build_fullflash.sh" -q
+# "${SCRIPT_DIR}/build_fullflash.sh" -q
 
 FULLFLASH="${SCRIPT_DIR}/fullflash.bin"
 if [ ! -f "$FULLFLASH" ]; then

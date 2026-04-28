@@ -135,7 +135,7 @@ echo "Gateway is running Linux at ${LINUX_IP}:${SSH_PORT}."
 # --- step 2: verify SSH access + devmem -------------------------------------
 
 SSH_SOCK="/tmp/remote_flash_ssh_$$"
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=60 -p $SSH_PORT"
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o HostKeyAlgorithms=+ssh-rsa -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=60 -p $SSH_PORT"
 
 # Verify SSH access (opens ControlMaster connection)
 # shellcheck disable=SC2086

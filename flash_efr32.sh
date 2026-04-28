@@ -60,7 +60,7 @@ GW_IP="${1:-192.168.1.88}"
 GW_PORT=8888
 VENV_DIR="${SCRIPT_DIR}/silabs-flasher"
 
-SSH_OPTS="-n -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
+SSH_OPTS="-n -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o HostKeyAlgorithms=+ssh-rsa"
 SSH="ssh $SSH_OPTS root@${GW_IP}"
 SSH_RETRIES=3
 
