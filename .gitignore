@@ -97,3 +97,4 @@ packages/
 site/
 .venv-docs/
 /lilgatewayenv/
+/.idea/
