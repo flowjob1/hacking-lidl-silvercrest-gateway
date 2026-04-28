@@ -205,17 +205,17 @@ Hypothesis was that trading ~4 per-packet cache ops for uncached
 loads/stores on small descriptors would win on hot paths. Measurement
 says otherwise:
 
-| Test | Batch 1 | F6 | Δ |
-|------|---------|----|---|
-| TCP Ubuntu→RTL (RX) | 93.9 Mb/s | 93.9 Mb/s | = |
-| **TCP RTL→Ubuntu (TX)** | **72.2 Mb/s** | **71.0 Mb/s** | **−1.2** |
-| TCP Parallel ×4 | 95.0 Mb/s | 95.3 Mb/s | +0.3 |
-| TCP Parallel ×8 | 96.1 Mb/s | 95.5 Mb/s | −0.6 |
-| TCP stress 300 s | 93.9 Mb/s | 94.0 Mb/s | +0.1 |
-| UDP 10M / 50M | 10.5 / 52.4, 0% | 10.5 / 52.4, 0% | = |
-| UDP 100M (CPU-bound) | 42.3, 56% loss | 42.3, 56% loss | = |
-| **UDP bidir to-rtl** | **29.4 Mb/s, 44% loss** | **31.5 Mb/s, 40% loss** | **+2.1** |
-| UDP bidir from-rtl | 13.2 Mb/s, 0% | 13.2 Mb/s, 0% | = |
+| Test                    | Batch 1                 | F6                      | Δ        |
+|-------------------------|-------------------------|-------------------------|----------|
+| TCP Ubuntu→RTL (RX)     | 93.9 Mb/s               | 93.9 Mb/s               | =        |
+| **TCP RTL→Ubuntu (TX)** | **72.2 Mb/s**           | **71.0 Mb/s**           | **−1.2** |
+| TCP Parallel ×4         | 95.0 Mb/s               | 95.3 Mb/s               | +0.3     |
+| TCP Parallel ×8         | 96.1 Mb/s               | 95.5 Mb/s               | −0.6     |
+| TCP stress 300 s        | 93.9 Mb/s               | 94.0 Mb/s               | +0.1     |
+| UDP 10M / 50M           | 10.5 / 52.4, 0%         | 10.5 / 52.4, 0%         | =        |
+| UDP 100M (CPU-bound)    | 42.3, 56% loss          | 42.3, 56% loss          | =        |
+| **UDP bidir to-rtl**    | **29.4 Mb/s, 44% loss** | **31.5 Mb/s, 40% loss** | **+2.1** |
+| UDP bidir from-rtl      | 13.2 Mb/s, 0%           | 13.2 Mb/s, 0%           | =        |
 
 TCP TX regresses by −1.2 Mb/s (≈1.7 %), above the 1 Mb/s "worth
 investigating" noise floor from `32-Kernel/CLAUDE.md`. Likely cause:
@@ -245,10 +245,10 @@ single commit on top of F8 (main at `5eaca40`). Kernel built and
 booted fine, IRQ 31 `spurious` stayed at 0, but the iperf suite
 regressed massively on the very first tests:
 
-| Test | Batch 1 baseline | F11+F13+F15 | Δ |
-|------|------------------|-------------|---|
-| TCP Ubuntu→RTL (RX) | 93.9 Mb/s | 46.5 Mb/s | **−47 Mb/s (−50 %)** |
-| TCP RTL→Ubuntu (TX) | 72.2 Mb/s | 49.4 Mb/s | **−23 Mb/s (−30 %)** |
+| Test                | Batch 1 baseline | F11+F13+F15 | Δ                    |
+|---------------------|------------------|-------------|----------------------|
+| TCP Ubuntu→RTL (RX) | 93.9 Mb/s        | 46.5 Mb/s   | **−47 Mb/s (−50 %)** |
+| TCP RTL→Ubuntu (TX) | 72.2 Mb/s        | 49.4 Mb/s   | **−23 Mb/s (−30 %)** |
 
 The suite was interrupted after the second test — the regression is
 obvious and the remaining tests were skipped.
@@ -318,20 +318,20 @@ after testing, or documented as intentionally left as-is._
 Full `scripts/test_rtl8196e_eth.sh` suite, #4 (pre-batch1) vs
 #5 (post-batch1):
 
-| Test | Before | After | Δ |
-|------|--------|-------|---|
-| TCP Ubuntu→RTL (RX) | 93.9 Mb/s, retrans 10 | 93.9 Mb/s, retrans 1 | = / better |
-| TCP RTL→Ubuntu (TX) | 71.2 Mb/s, retrans 3 | 72.2 Mb/s, retrans 0 | +1.0 |
-| TCP parallel ×4 | 95.4 Mb/s, 0.17 % retx | 95.0 Mb/s, **0.04 % retx** | -0.4, 4× fewer |
-| TCP parallel ×8 | 95.5 Mb/s, 0.13 % retx | 96.1 Mb/s, 0.15 % retx | +0.6 |
-| TCP 300 s stress | 94.1 Mb/s, retrans 11 | 93.9 Mb/s, retrans 12 | noise |
-| UDP 10 M (non-sat.) | 10.5 Mb/s, 0 loss | 10.5 Mb/s, 0 loss | = |
-| UDP 50 M (non-sat.) | 52.4 Mb/s, 0 loss | 52.4 Mb/s, 0 loss | = |
-| UDP 100 M (saturating) | 41.4 Mb/s, 57 % loss | 42.3 Mb/s, 56 % loss | CPU-bound |
-| UDP bidir to-rtl | 30.9 Mb/s, 41 % loss | 29.4 Mb/s, 44 % loss | noise (saturating) |
-| UDP bidir from-rtl | 13.1 Mb/s, 0 loss | 13.2 Mb/s, 0 loss | = |
-| `rx_errors` | 0 | 0 | = |
-| `tx_errors` | 0 | 0 | = |
+| Test                   | Before                 | After                      | Δ                  |
+|------------------------|------------------------|----------------------------|--------------------|
+| TCP Ubuntu→RTL (RX)    | 93.9 Mb/s, retrans 10  | 93.9 Mb/s, retrans 1       | = / better         |
+| TCP RTL→Ubuntu (TX)    | 71.2 Mb/s, retrans 3   | 72.2 Mb/s, retrans 0       | +1.0               |
+| TCP parallel ×4        | 95.4 Mb/s, 0.17 % retx | 95.0 Mb/s, **0.04 % retx** | -0.4, 4× fewer     |
+| TCP parallel ×8        | 95.5 Mb/s, 0.13 % retx | 96.1 Mb/s, 0.15 % retx     | +0.6               |
+| TCP 300 s stress       | 94.1 Mb/s, retrans 11  | 93.9 Mb/s, retrans 12      | noise              |
+| UDP 10 M (non-sat.)    | 10.5 Mb/s, 0 loss      | 10.5 Mb/s, 0 loss          | =                  |
+| UDP 50 M (non-sat.)    | 52.4 Mb/s, 0 loss      | 52.4 Mb/s, 0 loss          | =                  |
+| UDP 100 M (saturating) | 41.4 Mb/s, 57 % loss   | 42.3 Mb/s, 56 % loss       | CPU-bound          |
+| UDP bidir to-rtl       | 30.9 Mb/s, 41 % loss   | 29.4 Mb/s, 44 % loss       | noise (saturating) |
+| UDP bidir from-rtl     | 13.1 Mb/s, 0 loss      | 13.2 Mb/s, 0 loss          | =                  |
+| `rx_errors`            | 0                      | 0                          | =                  |
+| `tx_errors`            | 0                      | 0                          | =                  |
 
 Spot checks:
 

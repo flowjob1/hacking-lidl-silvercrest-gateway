@@ -38,6 +38,7 @@
 #
 # Options:
 #   -y, --yes       Non-interactive mode: skip all confirmation prompts
+#	-d. --debug		Enable Debug for called functions
 #
 # Environment variables:
 #   BOOT_IP     - Gateway IP in bootloader (default: 192.168.1.6)
@@ -55,6 +56,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Initialize DEBUG early (before sourcing lib/ssh.sh)
+DEBUG="${DEBUG:-}"
+
 # Hardened SSH helpers — see lib/ssh.sh.
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib/ssh.sh"
@@ -68,6 +72,7 @@ SSH_TIMEOUT="${SSH_TIMEOUT:-2}"
 while [ $# -gt 0 ]; do
     case "$1" in
         -y|--yes) CONFIRM="y" ;;
+        -d|--debug) DEBUG="y" ;;
         --help|-h)
             echo "Usage: $0 [-y] [LINUX_IP] [--help]"
             echo ""
@@ -79,9 +84,10 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "Options:"
             echo "  -y, --yes      Non-interactive mode (skip all prompts)"
+            echo "  -d, --debug    Enable debug output"
             echo ""
             echo "Environment: BOOT_IP, SSH_TIMEOUT, NET_MODE, RADIO_MODE, CONFIRM,"
-            echo "  IPADDR, NETMASK, GATEWAY"
+            echo "  IPADDR, NETMASK, GATEWAY, DEBUG"
             exit 0
             ;;
         --*) echo "Unknown option: $1. Use --help for usage."; exit 1 ;;
@@ -163,18 +169,16 @@ echo "========================================="
 echo ""
 
 # Detect gateway state based on whether LINUX_IP was provided.
-# BOOT_IP L2 reachability is enforced lazily — at boothold time on the upgrade
-# path, immediately on the bootloader path — so backup-via-SSH still works
-# from a routed network where the host has no 192.168.1.0/24 interface yet.
+# Simplified for v2 bootloader and public key authentication only.
 LINUX_RUNNING=""
 if [ -n "$LINUX_IP" ]; then
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Probing SSH on ${LINUX_IP}..." >&2
     echo "Probing SSH on ${LINUX_IP}..."
     if timeout "$SSH_TIMEOUT" bash -c "echo >/dev/tcp/$LINUX_IP/22" 2>/dev/null; then
+        [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] SSH port 22 is reachable" >&2
         LINUX_RUNNING="${LINUX_IP}:22"
-    elif timeout "$SSH_TIMEOUT" bash -c "echo >/dev/tcp/$LINUX_IP/2333" 2>/dev/null; then
-        LINUX_RUNNING="${LINUX_IP}:2333"
     else
-        echo "Error: cannot reach gateway at ${LINUX_IP} (no SSH on port 22 or 2333)." >&2
+        echo "Error: cannot reach gateway at ${LINUX_IP} (no SSH on port 22)." >&2
         echo "Check the Ethernet cable, or if the gateway is already in bootloader mode" >&2
         echo "re-run without argument:  $0" >&2
         exit 1
@@ -185,51 +189,41 @@ if [ -n "$LINUX_RUNNING" ]; then
     fw_host="${LINUX_RUNNING%%:*}"
     fw_port="${LINUX_RUNNING##*:}"
     echo "Linux detected at ${fw_host}:${fw_port}."
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Target: ${fw_host}:${fw_port}" >&2
 
-    if [ "$fw_port" = "2333" ]; then
-        # Port 2333 is exclusively Tuya/Lidl — no SSH needed
-        fw_type="tuya"
-    else
-        # Port 22 — could be custom or Tuya; SSH in to check
-        SSH_SOCK="/tmp/flash_install_ssh_$$"
-        # StrictHostKeyChecking=no + /dev/null known_hosts is intentional:
-        # this workflow installs custom firmware over Tuya stock, so the
-        # gateway's host key changes legitimately mid-flow. ControlMaster
-        # multiplexes the back-to-back commands below over one TCP session.
-        FI_SSH_OPTS=(
-            "${SSH_HARDEN_OPTS[@]}"
-            -o StrictHostKeyChecking=no
-            -o UserKnownHostsFile=/dev/null
-            -o ControlMaster=auto
-            -o ControlPath="$SSH_SOCK"
-            -o ControlPersist=10
-            -p "$fw_port"
-        )
-        FI_SSH_TARGET="root@${fw_host}"
+    # Simplified: assume custom firmware (v2 bootloader) with public key auth
+    fw_type="custom"
 
-        # Verify SSH access before proceeding
-        if ! ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "true" 2>/dev/null; then
-            echo "Error: SSH authentication failed." >&2
-            exit 1
-        fi
+    SSH_SOCK="./tmp/flash_install_ssh_$$"
+    mkdir -p "$(dirname "$SSH_SOCK")"
 
-        # Detect firmware type: devmem present = custom firmware (can boothold)
-        # devmem absent = Tuya firmware (even if SSH port was changed to 22)
-        if ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "command -v devmem" >/dev/null 2>&1; then
-            fw_type="custom"
-        else
-            fw_type="tuya"
-        fi
+    FI_SSH_OPTS=(
+        "${SSH_HARDEN_OPTS[@]}"
+        -o ControlMaster=auto
+        -o ControlPath="$SSH_SOCK"
+        -o ControlPersist=10
+        -p "$fw_port"
+    )
+    FI_SSH_TARGET="root@${fw_host}"
+
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Testing SSH connection..." >&2
+    # Verify SSH access before proceeding
+    if ! ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "true"; then
+        echo "Error: SSH authentication failed." >&2
+        echo "Ensure your public key is in /userdata/etc/dropbear/authorized_keys on the device." >&2
+        exit 1
     fi
-    echo "Firmware type: ${fw_type}"
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] SSH connection successful" >&2
 
+    echo "Firmware type: ${fw_type} (v2 bootloader assumed)"
+	
     # Read firmware version early (used for display and auto-flash detection)
-    if [ "$fw_type" = "custom" ]; then
-        fw_ver_line=$(ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "head -1 /userdata/etc/version" 2>/dev/null || true)
-        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-            FW_VERSION="${BASH_REMATCH[1]}"
-            echo "Firmware version: v${FW_VERSION}"
-        fi
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Reading firmware version..." >&2
+    fw_ver_line=$(ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "head -1 /userdata/etc/version" 2>/dev/null || true)
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Version line: ${fw_ver_line}" >&2
+    if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+        FW_VERSION="${BASH_REMATCH[1]}"
+        echo "Firmware version: v${FW_VERSION}"
     fi
 
     # --- propose backup (while Linux is still running) -----------------------
@@ -244,27 +238,30 @@ if [ -n "$LINUX_RUNNING" ]; then
         fi
     fi
 
-    if [ "$fw_type" = "custom" ]; then
-        # Save user config before reboot (will be injected into userdata)
-        # Only user-configurable files — not init scripts or system files
-        # Work on a temporary copy of the skeleton — never modify the original
-        USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
-        SKEL_WORK=$(mktemp -d)
-        cp -a "$USERDATA_SKEL/." "$SKEL_WORK/"
-        trap 'rm -rf "$SKEL_WORK"' EXIT
-        export SKELETON_DIR="$SKEL_WORK"
+    # Save user config before reboot (will be injected into userdata)
+    # Only user-configurable files — not init scripts or system files
+    # Work on a temporary copy of the skeleton — never modify the original
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Saving gateway config..." >&2
+    USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
+    SKEL_WORK=$(mktemp -d)
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Working skeleton dir: ${SKEL_WORK}" >&2
+    cp -a "$USERDATA_SKEL/." "$SKEL_WORK/"
+    trap 'rm -rf "$SKEL_WORK"' EXIT
+    export SKELETON_DIR="$SKEL_WORK"
 
-        SAVE_TAR=$(mktemp)
-        SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/leds.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
-        ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" \
-            "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
-        if [ -s "$SAVE_TAR" ]; then
-            tar xf "$SAVE_TAR" -C "$SKEL_WORK" 2>/dev/null || true
-            echo "Gateway config saved."
-            export NET_MODE="skip"
-            export RADIO_MODE="skip"
-        fi
-        rm -f "$SAVE_TAR"
+    SAVE_TAR=$(mktemp)
+    SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/leds.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Saving files: ${SAVE_FILES}" >&2
+    ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" \
+        "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
+    if [ -s "$SAVE_TAR" ]; then
+        tar xf "$SAVE_TAR" -C "$SKEL_WORK" 2>/dev/null || true
+        echo "Gateway config saved."
+        [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Saved config size: $(stat -c%s "$SAVE_TAR") bytes" >&2
+        export NET_MODE="skip"
+        export RADIO_MODE="skip"
+    fi
+    rm -f "$SAVE_TAR"
 
         # v2 → v3 migration: pre-v3.0 firmware shipped serialgateway and
         # had no /userdata/etc/radio.conf — the EFR32-side baud was hard-
@@ -289,27 +286,19 @@ FIRMWARE_BAUD=115200
 EOF
         fi
 
-        # Confirm the host can TFTP to the bootloader before tipping the
-        # gateway into bootloader mode — failing after boothold leaves the
-        # gateway stranded at 192.168.1.6 with the user scrambling to fix
-        # their network mid-flow.
-        require_boot_l2
+    # Confirm the host can TFTP to the bootloader before tipping the
+    # gateway into bootloader mode — failing after boothold leaves the
+    # gateway stranded at 192.168.1.6 with the user scrambling to fix
+    # their network mid-flow.
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Checking L2 reachability to bootloader..." >&2
+    require_boot_l2
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] L2 check passed, interface: ${IFACE}" >&2
 
-        echo "Sending boothold + reboot..."
-        ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "boothold && reboot" 2>/dev/null || true
-        # Close ControlMaster socket — gateway is rebooting
-        ssh -O exit -o ControlPath="$SSH_SOCK" "$FI_SSH_TARGET" 2>/dev/null || true
-    else
-        echo ""
-        echo "Tuya firmware detected. Cannot boothold automatically."
-        echo "To enter bootloader mode:"
-        echo "  - Connect serial console (3.3V UART, 38400 8N1, line wrap ON)"
-        echo "  - Power cycle the gateway"
-        echo "  - Press ESC repeatedly during boot to get the <RealTek> prompt"
-        echo "  - Then re-run:  $0"
-        echo ""
-        exit 1
-    fi
+    echo "Sending boothold + reboot..."
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Executing: boothold && reboot" >&2
+    ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "boothold && reboot" 2>/dev/null || true
+    # Close ControlMaster socket — gateway is rebooting
+    ssh -O exit -o ControlPath="$SSH_SOCK" "$FI_SSH_TARGET" 2>/dev/null || true
 
     # --- wait for bootloader after boothold + reboot -------------------------
     # Two-phase wait to avoid ARP false positives (Linux responds to ARP for
@@ -317,9 +306,11 @@ EOF
 
     # Phase 1: wait for SSH to go down (Linux is shutting down)
     echo "Waiting for shutdown..."
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Polling SSH port to detect shutdown..." >&2
     tries=0
     while [ $tries -lt 15 ]; do
         if ! timeout 1 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
+            [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] SSH port down after $tries attempts" >&2
             break
         fi
         sleep 1
@@ -328,13 +319,16 @@ EOF
 
     # Phase 2: wait for bootloader ARP
     echo "Waiting for bootloader at ${BOOT_IP}..."
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Polling ARP for bootloader..." >&2
     tries=0
     while [ $tries -lt 30 ]; do
         ip neigh del "$BOOT_IP" dev "$IFACE" 2>/dev/null || true
         bash -c "echo -n X >/dev/udp/$BOOT_IP/69" 2>/dev/null || true
         sleep 1
         nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
+        [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] ARP entry: ${nei}" >&2
         if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
+            [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Bootloader detected after $tries attempts" >&2
             break
         fi
         tries=$((tries + 1))
@@ -396,18 +390,9 @@ else
     fi
 fi
 
-# Detect bootloader type:
-#   - Custom firmware always has V2.3 bootloader — no need to ping.
-#   - First flash (no LINUX_IP): probe with ping (V2 responds, older don't).
-if [ "${fw_type:-}" = "custom" ]; then
-    BOOTLOADER_TYPE="v2"
-else
-    BOOTLOADER_TYPE="old"
-    if ping -c 1 -W 2 "$BOOT_IP" >/dev/null 2>&1; then
-        BOOTLOADER_TYPE="v2"
-    fi
-fi
-
+# Simplified: always assume v2 bootloader
+BOOTLOADER_TYPE="v2"
+[ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Assuming v2 bootloader" >&2
 echo "Bootloader detected at ${BOOT_IP} (type: ${BOOTLOADER_TYPE})."
 
 # If we reached bootloader without going through Linux (no backup opportunity),
@@ -470,8 +455,10 @@ if [ "$BOOTLOADER_TYPE" = "v2" ]; then
     # --- V2 bootloader: upload + auto-flash -----------------------------------
     echo ""
     echo "Uploading fullflash.bin via TFTP (16 MiB)..."
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Starting TFTP upload to ${BOOT_IP}..." >&2
     cd "$SCRIPT_DIR"
     out=$(timeout 300 tftp -m binary "$BOOT_IP" -c put fullflash.bin 2>&1) || true
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] TFTP output: ${out}" >&2
 
     if check_tftp_error "$out"; then
         echo "Error: TFTP transfer failed: $out" >&2

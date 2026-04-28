@@ -15,11 +15,14 @@
 #   - StrictHostKeyChecking policy (post-install: accept-new; first-flash: no)
 #   - ControlMaster / ControlPath / ControlPersist (multiplexed sessions)
 #   - port, identity file, etc.
+# When DEBUG=y, -v is added by ssh_retry.
 SSH_HARDEN_OPTS=(
     -o ConnectTimeout=5
-    -o ServerAliveInterval=3
-    -o ServerAliveCountMax=2
+    -o ServerAliveInterval=5
+    -o ServerAliveCountMax=5
     -o BatchMode=yes
+    -o StrictHostKeyChecking=accept-new
+    -o UserKnownHostsFile=/dev/null
 )
 
 # ssh_retry: ssh wrapper that retries on transport failures only (rc=255).
@@ -33,9 +36,18 @@ SSH_HARDEN_OPTS=(
 #             "root@${GW_IP}" "uptime"
 ssh_retry() {
     local attempt rc
+    local ssh_args=("$@")
+
+    # Add -v flag if debug mode is enabled
+    if [ "${DEBUG:-}" = "y" ]; then
+        ssh_args=(-v "${ssh_args[@]}")
+    fi
+
     for attempt in 1 2 3; do
-        ssh "$@"
+        [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] SSH attempt $attempt: ssh ${ssh_args[*]}" >&2
+        ssh "${ssh_args[@]}"
         rc=$?
+        [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] SSH attempt $attempt returned: $rc" >&2
         # rc=255 is SSH's "transport failed" code (cannot connect, host
         # unreachable, connection dropped mid-flight). Anything else is
         # the real remote command exit code — never retry that.
@@ -57,11 +69,14 @@ ssh_retry() {
 wait_for_port() {
     local host="$1" port="$2" timeout="${3:-5}"
     local deadline=$((SECONDS + timeout))
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Waiting for $host:$port (timeout: ${timeout}s)" >&2
     while [ $SECONDS -lt $deadline ]; do
         if timeout 1 bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null; then
+            [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Port $host:$port is reachable" >&2
             return 0
         fi
         sleep 0.5
     done
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Port $host:$port not reachable after ${timeout}s" >&2
     return 1
 }

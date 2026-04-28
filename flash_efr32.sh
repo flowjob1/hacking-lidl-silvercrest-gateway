@@ -44,6 +44,9 @@ GW_PORT=8888
 GW_IP_DEFAULT=192.168.1.88
 VENV_DIR="${SCRIPT_DIR}/silabs-flasher"
 
+# Initialize DEBUG early
+DEBUG="${DEBUG:-}"
+
 # --- CLI parsing ---------------------------------------------------------
 
 usage() {
@@ -75,6 +78,7 @@ Positional arguments:
 Options:
   -g, --gateway IP   Gateway IP (default: 192.168.1.88)
   -y, --yes          Skip the "Flash?" confirmation prompt
+  -d, --debug        Enable debug output
       --no-reboot    Do not reboot the gateway after a successful flash
                      (useful for chaining multiple invocations)
   -h, --help         Show this help and exit
@@ -117,6 +121,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)         usage; exit 0 ;;
         -y|--yes)          CONFIRM_FLAG=y; shift ;;
+        -d|--debug)        DEBUG=y; shift ;;
         -g|--gateway)
                            shift
                            if [ $# -eq 0 ]; then
@@ -212,19 +217,15 @@ BRIDGE_SYSFS="/sys/module/rtl8196e_uart_bridge/parameters"
 # Note: the remote side runs `sh -s` (POSIX, BusyBox-ash compatible),
 # NOT `bash -s` — the gateway has no bash binary
 # (CONFIG_BASH_IS_NONE=y in the rootfs BusyBox config).
-#
-# StrictHostKeyChecking=accept-new is appropriate here because the
-# gateway is already up and reachable in this script's workflow (the
-# host key was learned at first contact). For first-flash scenarios,
-# flash_install_rtl8196e.sh / flash_remote.sh use a looser policy.
 ssh_gw() {
     local target="root@${GW_IP}"
+    [ "${DEBUG:-}" = "y" ] && echo "[DEBUG] ssh_gw to $target" >&2
     if [ $# -gt 0 ]; then
-        ssh_retry "${SSH_HARDEN_OPTS[@]}" -o StrictHostKeyChecking=accept-new "$target" "$@"
+        ssh_retry "${SSH_HARDEN_OPTS[@]}" "$target" "$@"
     else
         # 'sh -s' = POSIX shell reading stdin. Works with BusyBox ash
         # on the gateway (no bash available there).
-        ssh_retry "${SSH_HARDEN_OPTS[@]}" -o StrictHostKeyChecking=accept-new "$target" 'sh -s'
+        ssh_retry "${SSH_HARDEN_OPTS[@]}" "$target" 'sh -s'
     fi
 }
 
@@ -407,6 +408,7 @@ echo ""
 # all operations below.
 
 echo "Connecting to ${GW_IP} — detecting configuration..."
+[ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Connecting to ${GW_IP} for bridge detection..." >&2
 # Remote shell emits structured KEY=VALUE lines (one per line). Local
 # parsing is then trivial via grep, no fragile suffix-matching. Any
 # stderr/non-KEY=VALUE noise from `set -u` etc. is tolerated.
@@ -512,6 +514,8 @@ emit STATUS ok
 REMOTE_EOF
 )
 DETECT_RC=$?
+[ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Detection returned: $DETECT_RC" >&2
+[ "${DEBUG:-}" = "y" ] && echo "[DEBUG] Detection output:" >&2 && echo "$DETECT_OUT" >&2
 if [ $DETECT_RC -ne 0 ]; then
     echo "Error: cannot reach gateway ${GW_IP} (rc=$DETECT_RC)." >&2
     exit 1
